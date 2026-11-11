@@ -1,0 +1,28 @@
+{
+  "_comment": "The one standard furniture scenario HomeLens uses. Every number here is an assumption chosen by the project author. None of it is measured market data and none of it comes from the house itself. An exterior photo cannot show furniture. Edit the numbers to model a different scenario.",
+  "package_name": "Standard furnished package",
+  "package_version": "1",
+  "condition": "Used, good condition, mid-range quality",
+  "valuation_basis": "Assumed price when new for each item, multiplied by one assumed resale fraction for used furniture in good condition.",
+  "fixed_inventory_note": "The same package is used for every house. The interior size of a house is unknown, so the quantity of furniture is not scaled to the house.",
+  "resale_fraction": 0.35,
+  "rent_spread_months": 36,
+  "rent_basis": "The package cost when new, spread evenly over the stated number of months. This is a scenario amount, not a rent premium measured from furnished and unfurnished listings.",
+  "items": [
+    {"name": "Sofa", "quantity": 1, "assumed_new_price_usd": 900},
+    {"name": "Armchair", "quantity": 1, "assumed_new_price_usd": 350},
+    {"name": "Coffee table", "quantity": 1, "assumed_new_price_usd": 200},
+    {"name": "TV stand", "quantity": 1, "assumed_new_price_usd": 200},
+    {"name": "Dining table", "quantity": 1, "assumed_new_price_usd": 500},
+    {"name": "Dining chair", "quantity": 4, "assumed_new_price_usd": 100},
+    {"name": "Queen bed frame", "quantity": 2, "assumed_new_price_usd": 350},
+    {"name": "Queen mattress", "quantity": 2, "assumed_new_price_usd": 600},
+    {"name": "Dresser", "quantity": 2, "assumed_new_price_usd": 300},
+    {"name": "Nightstand", "quantity": 2, "assumed_new_price_usd": 100},
+    {"name": "Desk", "quantity": 1, "assumed_new_price_usd": 250},
+    {"name": "Desk chair", "quantity": 1, "assumed_new_price_usd": 150},
+    {"name": "Bookshelf", "quantity": 1, "assumed_new_price_usd": 150},
+    {"name": "Lamp", "quantity": 4, "assumed_new_price_usd": 50},
+    {"name": "Area rug", "quantity": 1, "assumed_new_price_usd": 250}
+  ]
+}

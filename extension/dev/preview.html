@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HomeLens panel preview</title>
+  <link rel="stylesheet" href="../sidepanel.css">
+  <style>
+    #dev { position: sticky; top: 0; z-index: 5; background: #222; color: #eee; padding: 6px 8px; font: 12px system-ui; display: flex; gap: 6px; }
+    #dev select { flex: 1; min-width: 0; }
+  </style>
+</head>
+<body>
+  <!-- Developer preview only. It is not part of the extension that Chrome loads.
+       It stands in for Google Maps by feeding sample URLs to the same panel code. -->
+  <div id="dev">
+    <label for="sample">Pretend Google Maps URL</label>
+    <select id="sample"></select>
+  </div>
+  <main id="app"></main>
+  <script type="module" src="preview.js"></script>
+</body>
+</html>

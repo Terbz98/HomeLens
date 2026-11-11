@@ -1,0 +1,11 @@
+{
+  "name": "homelens-extension",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "HomeLens Chrome extension. Plain JavaScript, no build step and no dependencies.",
+  "scripts": {
+    "test": "node --test tests/",
+    "check": "for f in background.js content.js panel.js sidepanel_main.js lib/*.js dev/*.js; do node --check \"$f\" || exit 1; done"
+  }
+}

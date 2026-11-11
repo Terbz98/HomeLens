@@ -1,0 +1,23 @@
+{
+  "seattle": {
+    "metro": "SYNTHETIC",
+    "month": "2026-01",
+    "single_family_rent_index": 1.2,
+    "all_homes_rent_index": 1.0,
+    "ratio": 1.2
+  },
+  "san_francisco": {
+    "metro": "SYNTHETIC",
+    "month": "2026-01",
+    "single_family_rent_index": 1.2,
+    "all_homes_rent_index": 1.0,
+    "ratio": 1.2
+  },
+  "portland": {
+    "metro": "SYNTHETIC",
+    "month": "2026-01",
+    "single_family_rent_index": 1.2,
+    "all_homes_rent_index": 1.0,
+    "ratio": 1.2
+  }
+}

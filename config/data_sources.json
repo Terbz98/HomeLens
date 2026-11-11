@@ -1,0 +1,63 @@
+{
+  "_comment": "Every external file the pipeline downloads. Files are saved under data/raw and are not committed to git.",
+  "sources": [
+    {
+      "id": "zillow_zhvi_sfr_zip",
+      "url": "https://files.zillowstatic.com/research/public_csvs/zhvi/Zip_zhvi_uc_sfr_tier_0.33_0.67_sm_sa_month.csv",
+      "dest": "zillow/Zip_zhvi_uc_sfr_tier_0.33_0.67_sm_sa_month.csv",
+      "what": "Zillow Home Value Index, single-family homes, by ZIP, monthly, smoothed and seasonally adjusted. A typical value for the area, not a sale record.",
+      "license": "Zillow Research data, free for public use with clear attribution to Zillow. Not redistributed in this repository."
+    },
+    {
+      "id": "zillow_zori_all_zip",
+      "url": "https://files.zillowstatic.com/research/public_csvs/zori/Zip_zori_uc_sfrcondomfr_sm_month.csv",
+      "dest": "zillow/Zip_zori_uc_sfrcondomfr_sm_month.csv",
+      "what": "Zillow Observed Rent Index, all home types combined, by ZIP, monthly, smoothed. Zillow does not publish a single-family rent index at ZIP level.",
+      "license": "Zillow Research data, free for public use with clear attribution to Zillow. Not redistributed in this repository."
+    },
+    {
+      "id": "zillow_zori_sfr_metro",
+      "url": "https://files.zillowstatic.com/research/public_csvs/zori/Metro_zori_uc_sfr_sm_month.csv",
+      "dest": "zillow/Metro_zori_uc_sfr_sm_month.csv",
+      "what": "Zillow Observed Rent Index, single-family homes, by metro area. Used only to compute one single-family to all-homes rent ratio per metro.",
+      "license": "Zillow Research data, free for public use with clear attribution to Zillow. Not redistributed in this repository."
+    },
+    {
+      "id": "zillow_zori_all_metro",
+      "url": "https://files.zillowstatic.com/research/public_csvs/zori/Metro_zori_uc_sfrcondomfr_sm_month.csv",
+      "dest": "zillow/Metro_zori_uc_sfrcondomfr_sm_month.csv",
+      "what": "Zillow Observed Rent Index, all home types, by metro area. The other half of the rent ratio.",
+      "license": "Zillow Research data, free for public use with clear attribution to Zillow. Not redistributed in this repository."
+    },
+    {
+      "id": "census_zcta_gazetteer",
+      "url": "https://www2.census.gov/geo/docs/maps-data/data/gazetteer/2023_Gazetteer/2023_Gaz_zcta_national.zip",
+      "dest": "census/2023_Gaz_zcta_national.zip",
+      "what": "US Census Bureau 2023 Gazetteer: one center point (latitude, longitude) per ZIP Code Tabulation Area.",
+      "license": "US government work, public domain."
+    },
+    {
+      "id": "king_county_sales",
+      "url": "https://aqua.kingcounty.gov/extranet/assessor/Real%20Property%20Sales.zip",
+      "dest": "king_county/Real Property Sales.zip",
+      "what": "King County Department of Assessments: every recorded property sale (parcel number, date, price, sale type codes). Buyer and seller names are dropped on load.",
+      "license": "Public record published by King County, Washington. Not redistributed in this repository."
+    },
+    {
+      "id": "king_county_lookup",
+      "url": "https://aqua.kingcounty.gov/extranet/assessor/Lookup.zip",
+      "dest": "king_county/Lookup.zip",
+      "what": "King County Department of Assessments: meaning of the numeric codes in the sales file.",
+      "license": "Public record published by King County, Washington."
+    }
+  ],
+  "king_county_parcels": {
+    "id": "king_county_parcel_address",
+    "query_url": "https://services.arcgis.com/Ej0PsM5Aw677QF1W/arcgis/rest/services/PARCEL_ADDRESS_PUB_AREA_3069/FeatureServer/0/query",
+    "where": "CTYNAME='Seattle' AND PREUSE_CODE=2",
+    "fields": "PIN,ADDR_FULL,ZIP5,LAT,LON,PRIMARY_ADDR",
+    "dest": "king_county/seattle_single_family_parcels.csv",
+    "what": "King County GIS Open Data layer 'Parcels for King County with Address, Property and Ownership Information'. Only Seattle parcels whose present use is 'Single Family (Res Use/Zone)', and only parcel number, address, ZIP and coordinates. Owner fields are never requested.",
+    "license": "Public data published by King County GIS Open Data. Not redistributed in this repository."
+  }
+}

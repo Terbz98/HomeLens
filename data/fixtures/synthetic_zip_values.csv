@@ -1,0 +1,31 @@
+zip,city,state,metro,metro_id,supported_city_id,lat,lon,zhvi_usd,zhvi_month,zori_usd_month,zori_month,synthetic
+98103,Seattle,WA,"Seattle-Tacoma-Bellevue, WA",seattle,seattle,47.673,-122.343,933024.0,2026-01,2682.0,2026-01,True
+98105,Seattle,WA,"Seattle-Tacoma-Bellevue, WA",seattle,seattle,47.661,-122.283,818743.0,2026-01,2354.0,2026-01,True
+98107,Seattle,WA,"Seattle-Tacoma-Bellevue, WA",seattle,seattle,47.668,-122.378,847090.0,2026-01,2435.0,2026-01,True
+98115,Seattle,WA,"Seattle-Tacoma-Bellevue, WA",seattle,seattle,47.685,-122.282,872555.0,2026-01,2509.0,2026-01,True
+98116,Seattle,WA,"Seattle-Tacoma-Bellevue, WA",seattle,seattle,47.574,-122.395,827752.0,2026-01,2380.0,2026-01,True
+98117,Seattle,WA,"Seattle-Tacoma-Bellevue, WA",seattle,seattle,47.688,-122.381,985738.0,2026-01,2834.0,2026-01,True
+98118,Seattle,WA,"Seattle-Tacoma-Bellevue, WA",seattle,seattle,47.542,-122.269,590297.0,2026-01,1697.0,2026-01,True
+98125,Seattle,WA,"Seattle-Tacoma-Bellevue, WA",seattle,seattle,47.717,-122.3,920805.0,2026-01,2647.0,2026-01,True
+98004,Bellevue,WA,"Seattle-Tacoma-Bellevue, WA",seattle,,47.618,-122.205,622296.0,2026-01,1789.0,2026-01,True
+98052,Redmond,WA,"Seattle-Tacoma-Bellevue, WA",seattle,,47.681,-122.121,644627.0,2026-01,1853.0,2026-01,True
+94110,San Francisco,CA,"San Francisco-Oakland-Berkeley, CA",san_francisco,san_francisco,37.75,-122.415,1309212.0,2026-01,3323.0,2026-01,True
+94112,San Francisco,CA,"San Francisco-Oakland-Berkeley, CA",san_francisco,san_francisco,37.72,-122.443,1379005.0,2026-01,3501.0,2026-01,True
+94116,San Francisco,CA,"San Francisco-Oakland-Berkeley, CA",san_francisco,san_francisco,37.744,-122.486,1465940.0,2026-01,3721.0,2026-01,True
+94121,San Francisco,CA,"San Francisco-Oakland-Berkeley, CA",san_francisco,san_francisco,37.778,-122.494,1483658.0,2026-01,3766.0,2026-01,True
+94122,San Francisco,CA,"San Francisco-Oakland-Berkeley, CA",san_francisco,san_francisco,37.76,-122.484,1428081.0,2026-01,3625.0,2026-01,True
+94127,San Francisco,CA,"San Francisco-Oakland-Berkeley, CA",san_francisco,san_francisco,37.736,-122.459,1252215.0,2026-01,3179.0,2026-01,True
+94131,San Francisco,CA,"San Francisco-Oakland-Berkeley, CA",san_francisco,san_francisco,37.745,-122.442,1260644.0,2026-01,3200.0,2026-01,True
+94134,San Francisco,CA,"San Francisco-Oakland-Berkeley, CA",san_francisco,san_francisco,37.721,-122.413,1161206.0,2026-01,2948.0,2026-01,True
+94608,Emeryville,CA,"San Francisco-Oakland-Berkeley, CA",san_francisco,,37.836,-122.286,1193924.0,2026-01,3031.0,2026-01,True
+94611,Oakland,CA,"San Francisco-Oakland-Berkeley, CA",san_francisco,,37.83,-122.22,1139930.0,2026-01,2894.0,2026-01,True
+97202,Portland,OR,"Portland-Vancouver-Hillsboro, OR-WA",portland,portland,45.482,-122.643,437867.0,2026-01,1576.0,2026-01,True
+97206,Portland,OR,"Portland-Vancouver-Hillsboro, OR-WA",portland,portland,45.482,-122.598,450919.0,2026-01,1623.0,2026-01,True
+97211,Portland,OR,"Portland-Vancouver-Hillsboro, OR-WA",portland,portland,45.581,-122.637,583007.0,2026-01,2099.0,2026-01,True
+97212,Portland,OR,"Portland-Vancouver-Hillsboro, OR-WA",portland,portland,45.544,-122.644,524077.0,2026-01,1887.0,2026-01,True
+97213,Portland,OR,"Portland-Vancouver-Hillsboro, OR-WA",portland,portland,45.538,-122.6,505350.0,2026-01,1819.0,2026-01,True
+97214,Portland,OR,"Portland-Vancouver-Hillsboro, OR-WA",portland,portland,45.514,-122.643,458549.0,2026-01,1651.0,2026-01,True
+97215,Portland,OR,"Portland-Vancouver-Hillsboro, OR-WA",portland,portland,45.515,-122.6,470698.0,2026-01,1695.0,2026-01,True
+97217,Portland,OR,"Portland-Vancouver-Hillsboro, OR-WA",portland,portland,45.601,-122.701,638526.0,2026-01,2299.0,2026-01,True
+97005,Beaverton,OR,"Portland-Vancouver-Hillsboro, OR-WA",portland,,45.491,-122.804,608227.0,2026-01,2190.0,2026-01,True
+97222,Milwaukie,OR,"Portland-Vancouver-Hillsboro, OR-WA",portland,,45.441,-122.618,401302.0,2026-01,1445.0,2026-01,True

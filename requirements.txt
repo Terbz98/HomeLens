@@ -1,0 +1,16 @@
+# Top-level dependencies, pinned. Tested on Python 3.9.6 (macOS).
+# The full resolved set is in requirements.lock.
+fastapi==0.128.8
+uvicorn[standard]==0.39.0
+httpx==0.28.1
+pydantic==2.13.5
+python-dotenv==1.2.1
+numpy==2.0.2
+pandas==2.3.3
+scikit-learn==1.6.1
+scipy==1.13.1
+joblib==1.5.3
+torch==2.8.0
+torchvision==0.23.0
+pillow==11.3.0
+pytest==8.4.2

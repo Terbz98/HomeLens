@@ -1,0 +1,21 @@
+# secrets
+.env
+
+# python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# downloaded or derived data: not redistributed (see docs/licensing.md)
+data/raw/
+data/processed/
+data/images/
+models/
+reports/
+
+# os / editors
+.DS_Store
+.vscode/
+.idea/
+node_modules/
