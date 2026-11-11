@@ -7,7 +7,9 @@ training run. If the two ever disagree, `evaluation.md` is right. A test
 ## What the models are for
 
 Estimating the current market purchase price and monthly rent of a detached single-family home in
-Seattle, San Francisco or Portland, from its location and, where available, a licensed street photo.
+Seattle, San Francisco or Portland, from its location. A licensed street photo of the exterior was
+tested as a second input. It did not lower the error, so the app does not use it (see "Does the
+exterior photo help?" below).
 
 Not for: appraisals, lending or insurance decisions, price forecasts, other property types, other
 cities, or anything where a wrong number has real consequences.
@@ -18,7 +20,7 @@ cities, or anything where a wrong number has real consequences.
 |---|---|
 | Latitude and longitude of the confirmed house | Yes |
 | Month (for the Seattle sale model) | Yes |
-| Licensed street photo of the exterior (Mapillary) | Only where a photo exists and the photo model is served |
+| Licensed street photo of the exterior (Mapillary) | Tested, currently not used by the app (it did not lower the error) |
 | Bedrooms, bathrooms, floor area, interior condition | No. The app cannot know them |
 | Listing text, price tags or watermarks in images | No |
 | Anything about the people who live there | No |
@@ -30,7 +32,7 @@ cities, or anything where a wrong number has real consequences.
 | Area sale model | Zillow ZIP home value, single-family, 2026-09 | 430 ZIPs in the three metro areas | Distance-weighted nearest neighbors on location |
 | Area rent model | Zillow ZIP rent index, all home types, 2026-09 | 328 ZIPs | Distance-weighted nearest neighbors on location |
 | Seattle per-house sale model | Completed sale price, King County record | 9,652 sales, 2023-11-05 to 2026-11-04 | Distance-weighted nearest neighbors on location |
-| Seattle photo model | Same sales, for houses with a matched photo | See evaluation.md | Fixed ResNet18 embedding, PCA, ridge regression on what the location model missed |
+| Seattle photo model (trained, not used by the app) | Same sales, for houses with a matched photo | 1,705 sales | Fixed ResNet18 embedding, PCA, ridge regression on what the location model missed |
 
 Each model is compared against a simple baseline and against gradient boosting on the same inputs.
 The choice between candidates is made on validation data, never on the test data.
@@ -65,9 +67,43 @@ city, so the figures are rough.
 
 ### Does the exterior photo help?
 
-See the "Seattle photo model" and "Area photo experiment" sections of [evaluation.md](evaluation.md).
-Until photos have been downloaded and the photo model has been trained, that section says
-"Not trained", and the app gives location-only estimates.
+Measured answer: no, not with this setup. The app therefore gives location-only estimates.
+
+**Coverage.** Mapillary had a usable photo (taken 3 to 40 m away and, when the direction is known,
+pointing toward the house) for 1,703 of 2,997 sampled sold Seattle houses, which is 56.8%. For random
+spots near ZIP centers the share was 73.3% in San Francisco, 50.9% in Portland and 44.2% in Seattle.
+
+**Seattle, per house.** On the 327 test sales that have a photo:
+
+| Model | MAE | RMSE |
+|---|---:|---:|
+| Location only | $403,927 | $879,130 |
+| Location plus photo | $403,728 | $880,442 |
+
+The photo lowered the MAE by $200, which is 0.05%. To see whether that could be chance, the 327 test
+rows were resampled 2,000 times. The change in MAE ranged from $4,698 higher to $5,211 lower (95% of
+the resamples), so zero is well inside the range: no measurable difference. The RMSE got slightly worse.
+
+The model selection also points the same way. Out of nine photo models it chose the smallest and most
+heavily shrunk one (`pca8_ridge100`), which is what happens when the photo numbers carry almost no
+usable signal.
+
+**Rule for using the photo model in the app.** It is used only if it lowers the MAE on the calibration
+split by at least 2%. It lowered it by 0.04%, so it is not used. In the first version of the code the
+rule was "any lower error". That rule would have switched the photo model on because of a difference
+far inside the noise, so it was tightened after this result was seen. The rule looks only at the
+calibration split, not at the test split.
+
+**Area experiment (not used by the app).** 463 photos near random spots in the three cities, each
+labeled with its ZIP's Zillow value, with whole ZIPs held out. Typical home value: location only
+$285,597, location plus photo $277,606. Resampling whole ZIPs gives a range from $1,285 higher to
+$18,427 lower, so again no measurable difference. Monthly rent: $319 against $323, no measurable
+difference.
+
+**Likely reasons (not tested, the author's reading).** Most Mapillary photos are dashcam frames that
+look along the road, not at the house. Many are several years old. The encoder is a general ImageNet
+network that was never tuned on houses. Only 1,208 training sales have a photo. And much of a house's
+price comes from its interior size and condition, which no street photo shows.
 
 ## Prediction ranges
 
@@ -120,7 +156,10 @@ evaluation.md). This assumes the ratio is the same in every ZIP of a metro, whic
 - Location alone has a large error for individual houses.
 - The property type is confirmed by the user, not detected.
 - Street photos are often dashcam frames looking along the road, may be years old, and may show the
-  wrong house. The app shows the photo it used and lets the user reject it.
+  wrong house. The photo model is not used by the app. If a later version uses one, the app shows the
+  photo and lets the user reject it (this path runs in demo mode today).
+- The photo result is for one encoder, one photo source and one city. It does not show that the
+  exterior of a house carries no price information.
 - The served Seattle model is refit on all rows, including the test rows, so its own error is not
   measured directly. The reported error is for the version trained without the test rows.
 - Sale filters drop unusual sales (related parties, estates, quit claims), so the model reflects

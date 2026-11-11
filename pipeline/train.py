@@ -55,6 +55,10 @@ MIN_IMAGE_FIT_ROWS = 150
 MIN_IMAGE_EVAL_ROWS = 30
 IMAGE_PCA_SIZES = (8, 16, 32)
 IMAGE_RIDGE_ALPHAS = (1.0, 10.0, 100.0)
+# The photo model must lower the error by at least this share before the app uses it.
+# A smaller gain is treated as a tie, and a tie is not a reason to add a second model.
+SERVE_MIN_IMPROVEMENT = 0.02
+BOOTSTRAP_ROUNDS = 2000
 
 
 # ---------------------------------------------------------------- helpers
@@ -98,6 +102,44 @@ def conformal_quantile(scores: np.ndarray, target: float) -> float:
 
 
 # ------------------------------------------------------------ area models
+
+def compare_errors(y_true, base_pred, photo_pred, groups=None) -> Dict:
+    """How much lower is the photo model's MAE, and could that be chance?
+
+    The same rows are scored by both models, so the two errors are compared
+    row by row. The rows are resampled BOOTSTRAP_ROUNDS times (whole groups
+    at a time when groups are given, because rows of one group share a
+    label) to get a 95% range for the difference in MAE.
+    """
+    y_true = np.asarray(y_true, dtype=float)
+    gain = np.abs(np.asarray(base_pred, dtype=float) - y_true) - np.abs(np.asarray(photo_pred, dtype=float) - y_true)
+    base_mae = float(np.mean(np.abs(np.asarray(base_pred, dtype=float) - y_true)))
+    rng = np.random.default_rng(SEED)
+    if groups is None:
+        picks = rng.integers(0, len(gain), size=(BOOTSTRAP_ROUNDS, len(gain)))
+        means = gain[picks].mean(axis=1)
+    else:
+        groups = np.asarray(groups)
+        names = np.unique(groups)
+        sums = np.array([gain[groups == g].sum() for g in names])
+        counts = np.array([(groups == g).sum() for g in names])
+        picks = rng.integers(0, len(names), size=(BOOTSTRAP_ROUNDS, len(names)))
+        means = sums[picks].sum(axis=1) / counts[picks].sum(axis=1)
+    low, high = np.percentile(means, [2.5, 97.5])
+    if low > 0:
+        verdict = "the photo model is better"
+    elif high < 0:
+        verdict = "the photo model is worse"
+    else:
+        verdict = "no measurable difference"
+    return {
+        "mae_lowered_by_usd": round(float(gain.mean()), 2),
+        "mae_lowered_by_share": round(float(gain.mean()) / base_mae, 4) if base_mae > 0 else None,
+        "range_95_usd": [round(float(low), 2), round(float(high), 2)],
+        "resampled": "rows" if groups is None else "whole ZIPs",
+        "verdict": verdict,
+    }
+
 
 def area_candidates() -> Dict[str, Callable]:
     """Candidate area models. Each takes [latitude, longitude] rows."""
@@ -446,10 +488,13 @@ def train_image_model(sale_bundle: Dict, matches: pd.DataFrame, refs: np.ndarray
     test = {"location_only": error_metrics(y_test, base_test), "location_plus_photo": error_metrics(y_test, photo_test)}
     report["calibration_rows_with_photo"] = cal
     report["test_rows_with_photo"] = test
-    serve = cal["location_plus_photo"]["mae"] < cal["location_only"]["mae"]
+    cal_gain = 1.0 - cal["location_plus_photo"]["mae"] / cal["location_only"]["mae"]
+    serve = cal_gain >= SERVE_MIN_IMPROVEMENT
+    report["calibration_mae_lowered_by_share"] = round(float(cal_gain), 4)
     report["serve_photo_model"] = bool(serve)
-    report["serve_rule"] = "the photo model is served only if it had the lower error on the calibration split"
-    report["photo_improved_test_mae"] = bool(test["location_plus_photo"]["mae"] < test["location_only"]["mae"])
+    report["serve_rule"] = ("the photo model is served only if it lowered the error on the calibration split "
+                            "by at least %.0f%%" % (100 * SERVE_MIN_IMPROVEMENT))
+    report["test_comparison"] = compare_errors(y_test, base_test, photo_test)
 
     interval = None
     if n_cal >= MIN_CALIBRATION_ROWS:
@@ -562,7 +607,7 @@ def area_photo_experiment(zips: pd.DataFrame, points: pd.DataFrame, refs: np.nda
             mask = (p["city_id"] == city).to_numpy()
             block["by_city"][city] = {"location_only": error_metrics(y[mask], base[mask]),
                                       "location_plus_photo": error_metrics(y[mask], photo[mask])}
-        block["photo_improved_mae"] = bool(block["overall"]["location_plus_photo"]["mae"] < block["overall"]["location_only"]["mae"])
+        block["comparison"] = compare_errors(y, base, photo, groups)
         report["targets"][title] = block
     report["status"] = "trained" if report["targets"] else "insufficient_data"
     return report
@@ -605,6 +650,12 @@ def load_inputs(fixtures: bool) -> Dict:
         out["matches"] = pd.read_csv(paths["matches"], dtype={"property_id": str, "image_ref": str})
         npz = np.load(paths["embeddings"], allow_pickle=False)
         out["embeddings"] = (npz["image_ref"], npz["embedding"].astype(np.float64))
+    # How many searched houses and spots had a usable photo (written by pipeline.fetch_images).
+    out["coverage"] = None
+    coverage_path = base / "image_coverage.json"
+    if not fixtures and coverage_path.exists():
+        with open(coverage_path, "r", encoding="utf-8") as f:
+            out["coverage"] = json.load(f)
     out["area_points"] = None
     if paths["area_points"].exists() and paths["embeddings"].exists():
         out["area_points"] = pd.read_csv(paths["area_points"], dtype={"zip": str, "image_ref": str})
@@ -664,6 +715,7 @@ def train_all(fixtures: bool, out_dir: Optional[Path] = None) -> Dict:
             "seattle_sales_to": None if sales is None else str(sales["record_date"].max()),
         },
         "metro_rent_ratio": inputs["ratio"],
+        "photo_coverage": inputs["coverage"],
         "interval_target": INTERVAL_TARGET,
         "metrics": metrics,
     }

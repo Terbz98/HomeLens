@@ -50,6 +50,21 @@ def _table(rows: Dict[str, Dict]) -> List[str]:
     return lines
 
 
+def _comparison(c: Dict) -> str:
+    """One sentence: how much the photo changed the MAE and whether that could be chance."""
+    change = c["mae_lowered_by_usd"]
+    word = "lowered" if change >= 0 else "raised"
+    low, high = c["range_95_usd"]
+    return ("The photo %s the MAE by %s (%.2f%%). Resampling %s gives a 95%% range for the change in MAE "
+            "from %s to %s, so the result is: %s." % (
+                word, money(abs(change)), 100 * abs(c["mae_lowered_by_share"]), c["resampled"],
+                lower_or_higher(low), lower_or_higher(high), c["verdict"]))
+
+
+def lower_or_higher(value) -> str:
+    return "%s %s" % (money(abs(value)), "lower" if value >= 0 else "higher")
+
+
 def area_section(title: str, unit: str, report: Dict) -> List[str]:
     lines = ["## %s" % title, ""]
     if report.get("status") != "trained":
@@ -120,7 +135,7 @@ def photo_section(report: Dict) -> List[str]:
         return lines + ["Not trained: %s. %s" % (status, report.get("reason", "")), ""]
     lines += [
         "Encoder: %s, used as a fixed feature extractor." % report["encoder"],
-        "Houses with a matched photo per split: %s (all houses: %s)." % (
+        "Sales of houses with a matched photo per split: %s (all sales: %s)." % (
             ", ".join("%s %d" % kv for kv in report["rows_with_photo"].items()),
             ", ".join("%s %d" % kv for kv in report["rows_total"].items())),
         "Chosen photo model: `%s`." % report["chosen_photo_model"],
@@ -129,7 +144,9 @@ def photo_section(report: Dict) -> List[str]:
         "",
     ] + _table(report["test_rows_with_photo"]) + [
         "",
-        "Did the photo lower the test error? %s." % ("Yes" if report["photo_improved_test_mae"] else "No"),
+        "Did the photo help on the test split? %s" % _comparison(report["test_comparison"]),
+        "",
+        "On the calibration split the photo lowered the MAE by %.2f%%." % (100 * report["calibration_mae_lowered_by_share"]),
         "Is the photo model served by the app? %s (%s)." % (
             "Yes" if report["serve_photo_model"] else "No", report["serve_rule"]),
         "",
@@ -147,6 +164,19 @@ def photo_section(report: Dict) -> List[str]:
     return lines
 
 
+def coverage_section(coverage: Dict) -> List[str]:
+    lines = ["## Street photo coverage (Mapillary)", "",
+             "A place counts as covered when a photo exists that was taken 3 to 40 m away and, if its direction "
+             "is known, points within 70 degrees of the place.", "",
+             "| What was searched | City | Searched | With a usable photo | Share |", "|---|---|---:|---:|---:|"]
+    names = {"house": "Sold houses (random sample)", "area_point": "Random spots near ZIP centers"}
+    for kind in ("house", "area_point"):
+        for city, c in sorted(coverage.get(kind, {}).items()):
+            lines.append("| %s | %s | %d | %d | %.1f%% |" % (
+                names[kind], CITY_NAMES.get(city, city), c["searched"], c["with_photo"], 100 * c["share"]))
+    return lines + [""]
+
+
 def area_photo_section(report: Dict) -> List[str]:
     lines = ["## Area photo experiment (San Francisco and Portland)", ""]
     status = report.get("status")
@@ -154,7 +184,7 @@ def area_photo_section(report: Dict) -> List[str]:
         return lines + ["Not run: %s. %s" % (status, report.get("reason", "")), ""]
     lines += [report["description"], ""]
     for target, block in report["targets"].items():
-        lines += ["%s:" % target, ""] + _table(block["overall"]) + [""]
+        lines += ["%s:" % target, ""] + _table(block["overall"]) + ["", "Did the photo help? %s" % _comparison(block["comparison"]), ""]
         for city, rows in block["by_city"].items():
             lines += ["%s:" % CITY_NAMES.get(city, city), ""] + _table(rows) + [""]
     return lines
@@ -181,6 +211,8 @@ def render(manifest: Dict) -> str:
     lines += area_section("Area model: typical single-family home value", "USD", metrics["area_sale"])
     lines += area_section("Area model: monthly rent index, all home types", "USD per month", metrics["area_rent"])
     lines += sale_section(metrics["seattle_sale"])
+    if manifest.get("photo_coverage"):
+        lines += coverage_section(manifest["photo_coverage"])
     lines += photo_section(metrics["seattle_photo"])
     if "area_photo" in metrics:
         lines += area_photo_section(metrics["area_photo"])

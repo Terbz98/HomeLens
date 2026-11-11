@@ -29,6 +29,23 @@ def test_conformal_quantile_is_conservative():
     assert np.mean(scores <= q) >= 0.80
 
 
+def test_compare_errors_says_when_a_gain_is_real_and_when_it_is_noise():
+    rng = np.random.default_rng(1)
+    y = np.full(400, 1000.0)
+    base = y + 100.0                                         # always off by 100
+    clearly_better = y + 50.0                                # always off by 50
+    c = train.compare_errors(y, base, clearly_better)
+    assert c["mae_lowered_by_usd"] == 50.0 and c["mae_lowered_by_share"] == 0.5
+    assert c["verdict"] == "the photo model is better"
+    assert train.compare_errors(y, clearly_better, base)["verdict"] == "the photo model is worse"
+    coin_flip = y + 100.0 + rng.normal(0, 30, 400)           # sometimes closer, sometimes further
+    noisy = train.compare_errors(y, base, coin_flip)
+    assert noisy["range_95_usd"][0] < 0 < noisy["range_95_usd"][1]
+    assert noisy["verdict"] == "no measurable difference"
+    grouped = train.compare_errors(y, base, clearly_better, groups=np.repeat(np.arange(40), 10))
+    assert grouped["resampled"] == "whole ZIPs" and grouped["mae_lowered_by_usd"] == 50.0
+
+
 def test_xyz_distance_matches_ground_distance():
     a = (47.6561, -122.3560)
     b = (47.6565, -122.3568)
@@ -116,6 +133,8 @@ def test_photo_model_trains_on_fixtures_and_never_shares_a_photo_across_splits(d
     assert photo["rows_with_photo"]["test"] >= 30
     assert set(photo["test_rows_with_photo"]) == {"location_only", "location_plus_photo"}
     assert isinstance(photo["serve_photo_model"], bool)
+    assert photo["serve_photo_model"] == (photo["calibration_mae_lowered_by_share"] >= train.SERVE_MIN_IMPROVEMENT)
+    assert set(photo["test_comparison"]) >= {"mae_lowered_by_usd", "range_95_usd", "verdict"}
     assert photo["interval"].get("status") == "unavailable"       # only 40 calibration rows: no range is claimed
 
 

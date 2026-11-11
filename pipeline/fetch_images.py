@@ -163,7 +163,8 @@ def main() -> int:
     log = run(provider, targets, PROCESSED_DIR / "image_search_log.csv", IMAGES_DIR / "mapillary")
     write_match_files(log, PROCESSED_DIR)
     print(json.dumps(coverage(log), indent=2))
-    errors = int(log["status"].astype(str).str.startswith("error").sum())
+    last = log.drop_duplicates("property_id", keep="last")       # a retried search has more than one row
+    errors = int(last["status"].astype(str).str.startswith("error").sum())
     if errors:
         print("%d searches failed. Run the same command again to retry them." % errors)
     return 0

@@ -15,7 +15,7 @@ demo mode instead (see the README): every number will then be stamped "Demo mode
 |---|---|---|
 | 1 | Open Google Maps and click the HomeLens icon | Side panel opens. Status **Select a house** |
 | 2 | Search for `209 N 41st St, Seattle, WA` and select it | Status **Confirm property**. The address is listed with "Seattle: supported city" and "Matched to a single-family parcel" |
-| 3 | Choose **Detached single-family house**, click **Estimate** | Status **Location-only estimate** (or **Estimate ready** when a photo was used). Four price cards |
+| 3 | Choose **Detached single-family house**, click **Estimate** | Status **Location-only estimate**, because the photo model is not in use (**Estimate ready** appears only when a photo was used). Four price cards |
 | 4 | Read the Buy cards | "Without furniture" has a range and the tags "Trained model" and "Per-house model". "With furniture" is $2,188 higher and tagged "Scenario" |
 | 5 | Read the Rent cards | Explicit "/month". Tagged "Area-level figure". No range, with the reason written out |
 | 6 | Open **Furniture assumptions** and **About this estimate** | The fixed package, the model version, the estimate date and the data period |

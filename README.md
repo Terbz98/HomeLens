@@ -114,7 +114,9 @@ python -m pipeline.train
 python -m pipeline.evaluate
 ```
 
-The photo model is used by the app only if it beats the location-only model on held-out data.
+The photo model is used by the app only if it lowers the error on held-out sales by at least 2%.
+In the current run it did not (the difference was 0.04%), so the app gives location-only estimates.
+The full result is in [docs/evaluation.md](docs/evaluation.md) and [docs/model_card.md](docs/model_card.md).
 
 ## 3. Start the backend
 
@@ -218,7 +220,8 @@ It does not ask for `tabs`, `history`, `activeTab`, `storage` or access to all s
 - Location alone is a weak predictor of one house's price. See the measured error in
   [docs/evaluation.md](docs/evaluation.md).
 - Property type is confirmed by you. HomeLens does not detect it.
-- Street photo coverage is uneven, so many houses get a location-only estimate.
+- The photo model did not beat the location-only model, so every real estimate is location-only.
+  Street photo coverage is also uneven: 56.8% of sampled Seattle houses had a usable photo.
 - Google Street View images are never read, stored or sent to a model. That part of the original
   idea is blocked by Google's terms. See [docs/licensing.md](docs/licensing.md).
 - The backend is meant to run on your own computer. It has no accounts and no HTTPS.

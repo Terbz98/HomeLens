@@ -1,6 +1,6 @@
 # Three-minute project proposal script
 
-About 420 words, which is three minutes at a calm speaking pace. Every figure is copied from
+About 470 words, which is a little over three minutes at a calm speaking pace. Every figure is copied from
 [evaluation.md](evaluation.md).
 
 ---
@@ -10,8 +10,8 @@ About 420 words, which is three minutes at a calm speaking pace. Every figure is
 When you look at a house on Google Maps, you can see it, but you cannot tell what it costs. HomeLens
 is a Chrome extension that answers that. You click a house, confirm the address, and a side panel
 shows four numbers: the price to buy it and the monthly rent, each with and without furniture. You
-do not type in bedrooms or floor area. The only inputs are where the house is and, when one is
-available, a street photo of the outside.
+do not type in bedrooms or floor area. The app only needs to know where the house is. We also tested
+whether a street photo of the outside makes the estimate better.
 
 **[0:35] The data**
 
@@ -29,13 +29,15 @@ pretrained network turns the photo into numbers and a regression uses them to co
 estimate. To avoid leakage, we train on older sales and test on the newest ones, and no house
 appears on both sides.
 
-**[1:45] Results so far**
+**[1:45] Results**
 
 On 1,931 Seattle sales the model never saw, the city-median baseline is off by $517,088 on average.
 The location-only model is off by $363,904. The median price is $1,125,000, so location alone is
-still wrong by about a third. That gap is exactly why the outside of the house matters, and
-whether the photo closes it is the main question of this project. The measured answer is in our
-evaluation report.
+still wrong by about a third. Does the photo close that gap? Mapillary had a usable photo for 57
+percent of the houses we sampled. On the 327 test sales with a photo, location only is off by
+$403,927 and location plus photo by $403,728. That is $200 better, which is far inside the noise.
+So our measured answer is no: with dashcam street photos and a general-purpose image network, the
+photo did not help, and the app keeps using location only.
 
 **[2:20] Being honest about the numbers**
 
@@ -47,4 +49,5 @@ its measured coverage is shown next to it.
 
 **[2:50] Close**
 
-HomeLens runs today: the extension, the backend, the trained models and the tests. Thank you.
+HomeLens runs today: the extension, the backend, the trained models and the tests. The next step
+would be photos that face the house and a network tuned on houses. Thank you.
