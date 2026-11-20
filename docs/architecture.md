@@ -21,7 +21,8 @@
 
  Training pipeline (run by hand, offline)
  download -> build_dataset + validate -> [fetch_images -> embed_images] -> train -> evaluate
-   Zillow CSVs, Census ZIP centers, King County sales and parcels      models/real/bundle.joblib
+   Zillow CSVs, Census ZIP centers, King County sales,                  models/real/bundle.joblib
+   parcels and building records
 ```
 
 ## What happens when you ask for an estimate
@@ -38,9 +39,13 @@
    unless the backend is sure.
 4. **You confirm** the house and that it is a detached single-family home.
 5. **Estimate.** The panel sends the confirmed position to `POST /estimate` with a request id.
-6. **The backend** (`backend/app/estimator.py`) checks the city, runs the models, optionally looks
-   for a licensed street photo, adds the furniture scenario, rejects impossible numbers, and returns
-   the four estimates with labels, ranges where valid, model version and data period.
+6. **The backend** (`backend/app/estimator.py`) checks the city and runs the models. For a Seattle
+   house matched to a county parcel it looks up the county record for that parcel (living area,
+   grade, age, condition, rooms, lot, view) and uses the house-record model; otherwise it uses the
+   location-only model. It then looks for a licensed street photo, which the photo model uses to
+   correct the house-record estimate (setting `HOMELENS_PHOTO_MODEL`). It adds the furniture
+   scenario, rejects impossible numbers, and returns the four estimates with labels, ranges where
+   valid, model version and data period.
 7. **The panel shows the result**, but only if it belongs to the house that is confirmed right now
    and carries the request id that is still current (`extension/lib/state.js`).
 

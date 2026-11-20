@@ -19,6 +19,10 @@ class Settings:
     model_dir: Path = REAL_MODEL_DIR
     zip_table_path: Path = PROCESSED_DIR / "zip_values.csv"
     parcels_path: Optional[Path] = PROCESSED_DIR / "seattle_parcels.csv"
+    house_features_path: Optional[Path] = PROCESSED_DIR / "seattle_house_features.csv"
+    # "on": use the photo model whenever one is trained (the panel states its measured effect),
+    # "auto": only when it passed the 2% rule in training, "off": never.
+    photo_model: str = "on"
     requests_per_minute: int = 30
     geocoders: List[str] = field(default_factory=lambda: ["nominatim", "census"])
     geocode_timeout_s: float = 6.0
@@ -47,6 +51,9 @@ def load_settings(env: Optional[Mapping[str, str]] = None) -> Settings:
     for origin in extra:
         if origin == "*" or not origin.startswith(("http://127.0.0.1:", "http://localhost:")):
             raise ValueError("HOMELENS_EXTRA_ORIGINS may only list local preview origins, got %r" % origin)
+    photo_model = (env.get("HOMELENS_PHOTO_MODEL") or "on").strip().lower()
+    if photo_model not in ("on", "auto", "off"):
+        raise ValueError("HOMELENS_PHOTO_MODEL must be on, auto or off, got %r" % photo_model)
     geocoders = [g.strip().lower() for g in (env.get("HOMELENS_GEOCODERS") or "nominatim,census").split(",") if g.strip()]
     for name in geocoders:
         if name not in ("nominatim", "census"):
@@ -57,9 +64,11 @@ def load_settings(env: Optional[Mapping[str, str]] = None) -> Settings:
         extension_id=extension_id,
         extra_origins=extra,
         mapillary_token=(env.get("MAPILLARY_TOKEN") or "").strip(),
+        photo_model=photo_model,
     )
     if demo:
         settings.model_dir = DEMO_MODEL_DIR
         settings.zip_table_path = FIXTURES_DIR / "synthetic_zip_values.csv"
         settings.parcels_path = None
+        settings.house_features_path = None
     return settings

@@ -28,8 +28,32 @@ data. `data/processed/seattle_sales.csv` and `data/fixtures/synthetic_seattle_sa
 | `utilities_included` | no | Rentals: `yes`, `no` or `unknown` |
 | `image_ref`, `image_provider`, `image_license`, `image_captured_at`, `image_distance_m` | no | The matched exterior photo and where it came from |
 
-Bedrooms, bathrooms and floor area are deliberately not in the schema. The app cannot know them
-when a user asks for an estimate, so no model may use them.
+Bedrooms, bathrooms and floor area are not in this import schema, because the user never types them.
+For Seattle they come instead from King County's own record for the parcel the user confirmed, which
+the app can look up at prediction time (see "Seattle house record" below).
+
+### Seattle house record
+
+`data/processed/seattle_house_features.csv`, one row per Seattle single-family parcel, built by
+`pipeline/build_dataset.py` with `core/house_features.py` from the county's Residential Building and
+Parcel files.
+
+| Column | Meaning |
+|---|---|
+| `property_id` | 10 digit King County parcel number (Major + Minor) |
+| `living_sqft` | Finished living area, square feet |
+| `grade` | County building grade, 1 to 13 (7 is average) |
+| `year_built`, `year_renovated` | `year_renovated` is 0 when never renovated |
+| `condition` | 1 (poor) to 5 (very good) |
+| `bedrooms`, `bathrooms` | Bathrooms: full 1, three-quarter 0.75, half 0.5 |
+| `stories`, `basement_sqft` | Stories, finished basement area |
+| `buildings_on_parcel` | Number of residential buildings on the parcel |
+| `lot_sqft` | Lot size, square feet |
+| `view_score` | Sum of the county's view ratings (mountains, water, skyline), 0 = no view |
+| `waterfront` | 1 when the parcel is on the water |
+
+The record describes the building as it is today. Training drops a sale when the house was built or
+renovated in or after the sale year, because then the record describes a different building.
 
 ### Validation command
 

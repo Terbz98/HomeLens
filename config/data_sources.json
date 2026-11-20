@@ -49,6 +49,20 @@
       "dest": "king_county/Lookup.zip",
       "what": "King County Department of Assessments: meaning of the numeric codes in the sales file.",
       "license": "Public record published by King County, Washington."
+    },
+    {
+      "id": "king_county_res_building",
+      "url": "https://aqua.kingcounty.gov/extranet/assessor/Residential%20Building.zip",
+      "dest": "king_county/Residential Building.zip",
+      "what": "King County Department of Assessments: one row per residential building (living area, year built, building grade, condition, bedrooms, bathrooms). Describes the building as currently recorded, not at the time of each sale.",
+      "license": "Public record published by King County, Washington. Not redistributed in this repository."
+    },
+    {
+      "id": "king_county_parcel",
+      "url": "https://aqua.kingcounty.gov/extranet/assessor/Parcel.zip",
+      "dest": "king_county/Parcel.zip",
+      "what": "King County Department of Assessments: one row per parcel (lot size, view and waterfront codes). Owner names are not in this file's used columns.",
+      "license": "Public record published by King County, Washington. Not redistributed in this repository."
     }
   ],
   "king_county_parcels": {

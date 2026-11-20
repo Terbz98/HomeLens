@@ -7,9 +7,9 @@ training run. If the two ever disagree, `evaluation.md` is right. A test
 ## What the models are for
 
 Estimating the current market purchase price and monthly rent of a detached single-family home in
-Seattle, San Francisco or Portland, from its location. A licensed street photo of the exterior was
-tested as a second input. It did not lower the error, so the app does not use it (see "Does the
-exterior photo help?" below).
+Seattle, San Francisco or Portland. In Seattle the buy price uses the house's location, the county's
+public record of the building (living area, grade, age, condition, rooms, lot, view) and, where one
+exists, a licensed street photo. Elsewhere it uses location only.
 
 Not for: appraisals, lending or insurance decisions, price forecasts, other property types, other
 cities, or anything where a wrong number has real consequences.
@@ -19,9 +19,9 @@ cities, or anything where a wrong number has real consequences.
 | Input | Used |
 |---|---|
 | Latitude and longitude of the confirmed house | Yes |
-| Month (for the Seattle sale model) | Yes |
-| Licensed street photo of the exterior (Mapillary) | Tested, currently not used by the app (it did not lower the error) |
-| Bedrooms, bathrooms, floor area, interior condition | No. The app cannot know them |
+| Month (for the Seattle sale models) | Yes |
+| King County record of the house: living area, building grade, year built and renovated, condition, bedrooms, bathrooms, stories, finished basement, number of buildings, lot size, view, waterfront | Seattle, when the confirmed house matches a county parcel. The user never types these |
+| Licensed street photo of the exterior (Mapillary) | Seattle, when a photo exists. Its measured effect is shown next to the estimate |
 | Listing text, price tags or watermarks in images | No |
 | Anything about the people who live there | No |
 
@@ -31,15 +31,36 @@ cities, or anything where a wrong number has real consequences.
 |---|---|---|---|
 | Area sale model | Zillow ZIP home value, single-family, 2026-09 | 430 ZIPs in the three metro areas | Distance-weighted nearest neighbors on location |
 | Area rent model | Zillow ZIP rent index, all home types, 2026-09 | 328 ZIPs | Distance-weighted nearest neighbors on location |
-| Seattle per-house sale model | Completed sale price, King County record | 9,652 sales, 2023-11-05 to 2026-11-04 | Distance-weighted nearest neighbors on location |
-| Seattle photo model (trained, not used by the app) | Same sales, for houses with a matched photo | 1,705 sales | Fixed ResNet18 embedding, PCA, ridge regression on what the location model missed |
+| Seattle location-only sale model (used when no county record matches) | Completed sale price, King County record | 9,652 sales, 2023-11-05 to 2026-11-04 | Distance-weighted nearest neighbors on location |
+| Seattle house-record sale model (used by the app) | Same sales | 9,475 sales | Gradient boosted trees on location, month and the house record |
+| Seattle photo model (used by the app on top of the house-record model) | Same sales, houses with a matched photo | 5,479 sales | Fixed ConvNeXt-Tiny photo embedding, PCA, ridge regression on what the house-record model missed |
 
-Each model is compared against a simple baseline and against gradient boosting on the same inputs.
-The choice between candidates is made on validation data, never on the test data.
+Each model is compared against simple baselines. The choice between candidates is made on validation
+data or by cross-validation on training rows, never on the test data.
 
 ## Results
 
-### Seattle per-house sale price (test split: the newest 1,931 sales, median price $1,125,000)
+### Seattle buy price with the house record (test split: the newest 1,896 sales, median price $1,116,500)
+
+| Model | MAE | RMSE |
+|---|---:|---:|
+| Baseline: city median | $511,161 | $906,039 |
+| Baseline: ZIP median of past sales | $439,296 | $808,971 |
+| Location only, same rows | $359,220 | $662,583 |
+| Location plus house record (chosen model) | $163,388 | $313,307 |
+
+The median error is 9.2% of the sale price, against 20.6% for location only. On the 1,629 test sales
+where Zillow has a ZIP value for the sale month, that ZIP value is off by $486,713 on average and the
+house-record model by $162,883. The 80% price range is plus or minus 19.3%, and it held the real
+price for 81.3% of the test sales.
+
+177 sales were left out because the house was built or renovated in or after the year it sold: the
+county record shows today's building, which is not the one that was sold.
+
+Plain reading: two neighbouring houses now get different prices, because a larger, newer or higher
+grade house is priced higher. The record is what the location-only model was missing.
+
+### Seattle buy price, location only (test split: the newest 1,931 sales, median price $1,125,000)
 
 | Model | MAE | RMSE |
 |---|---:|---:|
@@ -47,11 +68,7 @@ The choice between candidates is made on validation data, never on the test data
 | Baseline: ZIP median of past sales | $444,860 | $843,839 |
 | Location only (chosen model) | $363,904 | $692,018 |
 
-On the 1,658 test sales where Zillow has a ZIP value for the sale month, using that ZIP value as the
-prediction gives MAE $494,251, against $373,052 for the location-only model on the same rows.
-
-Plain reading: location alone gets a typical Seattle house wrong by about a third of its price. It
-beats the baselines, but it cannot tell a large renovated house from a small worn one next door.
+This model is used only when the confirmed house cannot be matched to a county parcel.
 
 ### Area models (each ZIP predicted by a model that never saw it)
 
@@ -67,66 +84,76 @@ city, so the figures are rough.
 
 ### Does the exterior photo help?
 
-Measured answer: no, not with this setup. The app therefore gives location-only estimates.
+Short answer: a photo carries a small real signal beyond location, but almost nothing beyond the
+county record.
 
 **Coverage.** Mapillary had a usable photo (taken 3 to 40 m away and, when the direction is known,
-pointing toward the house) for 1,703 of 2,997 sampled sold Seattle houses, which is 56.8%. For random
-spots near ZIP centers the share was 73.3% in San Francisco, 50.9% in Portland and 44.2% in Seattle.
+pointing toward the house) for 5,465 of 9,487 sold Seattle houses, which is 57.6%. For random spots
+near ZIP centers the share was 73.3% in San Francisco, 50.9% in Portland and 44.2% in Seattle.
 
-**Seattle, per house.** On the 327 test sales that have a photo:
+**Three ways to turn a photo into numbers were compared:** ResNet18 and ConvNeXt-Tiny (pretrained
+image networks, used unchanged), and Harris corner features, the corner and edge measurements of DSP
+Lab 7 counted in a 3 x 3 grid (`core/harris.py`). The encoder is chosen by cross-validation on the
+training rows only.
 
-| Model | MAE | RMSE |
-|---|---:|---:|
-| Location only | $403,927 | $879,130 |
-| Location plus photo | $403,728 | $880,442 |
+**Photo on top of location only** (the professor's question), 1,095 test sales with a photo:
 
-The photo lowered the MAE by $200, which is 0.05%. To see whether that could be chance, the 327 test
-rows were resampled 2,000 times. The change in MAE ranged from $4,698 higher to $5,211 lower (95% of
-the resamples), so zero is well inside the range: no measurable difference. The RMSE got slightly worse.
+| Encoder | Without photo | With photo | Result |
+|---|---:|---:|---|
+| ResNet18 | $403,273 | $401,286 | No measurable difference |
+| ConvNeXt-Tiny (chosen) | $403,273 | $400,472 | The photo model is better |
+| Harris corners (DSP Lab 7) | $403,273 | $401,817 | The photo model is better |
 
-The model selection also points the same way. Out of nine photo models it chose the smallest and most
-heavily shrunk one (`pca8_ridge100`), which is what happens when the photo numbers carry almost no
-usable signal.
+ConvNeXt lowered the MAE by $2,801. Resampling the test rows 2,000 times gives a range from $384 to
+$5,286 lower, so the gain is real, but it is under 1% of the error. The Harris features also gave a
+small real gain.
 
-**Rule for using the photo model in the app.** It is used only if it lowers the MAE on the calibration
-split by at least 2%. It lowered it by 0.04%, so it is not used. In the first version of the code the
-rule was "any lower error". That rule would have switched the photo model on because of a difference
-far inside the noise, so it was tightened after this result was seen. The rule looks only at the
-calibration split, not at the test split.
+**Photo on top of the house record** (what the app uses), 1,080 test sales with a photo:
+
+| Encoder | Without photo | With photo | Result |
+|---|---:|---:|---|
+| ResNet18 | $175,673 | $176,741 | No measurable difference |
+| ConvNeXt-Tiny (chosen) | $175,673 | $175,336 | No measurable difference |
+| Harris corners (DSP Lab 7) | $175,673 | $177,869 | The photo model is worse |
+
+Once the model knows the living area, grade and age, the photo adds nothing measurable. A plausible
+reading (the author's, not tested): what the photo can show, such as size and how new and well kept
+a house looks, is already in the record.
+
+**How the app uses it.** The photo model is used whenever a photo is found (setting
+`HOMELENS_PHOTO_MODEL=on`, the default), and the panel shows the photo and this test result next to
+the estimate. With `HOMELENS_PHOTO_MODEL=auto` it is used only if it lowered the calibration error by
+at least 2%. It lowered it by 0.62%, so in that mode it would not be used.
 
 **Area experiment (not used by the app).** 463 photos near random spots in the three cities, each
 labeled with its ZIP's Zillow value, with whole ZIPs held out. Typical home value: location only
 $285,597, location plus photo $277,606. Resampling whole ZIPs gives a range from $1,285 higher to
-$18,427 lower, so again no measurable difference. Monthly rent: $319 against $323, no measurable
-difference.
+$18,427 lower, so no measurable difference.
 
-**Photo date.** A photo and a sale can be years apart, so the photo may show the house before or
-after a renovation. The capture date of every matched photo is recorded. Across 1,705 Seattle sales
-with a dated photo, the median time between sale and photo is 5.4 years, only 14.3% of photos were
-taken within 3 years of the sale, and 111 photos were taken after the sale. Too few of the newest
-(test) sales have a recent photo for a date-ordered test, so this was checked with 5-fold
-cross-validation grouped by house (see "Photo date experiment" in evaluation.md):
+**Photo date.** A photo and a sale can be years apart. Across 5,479 Seattle sales with a dated photo,
+the median gap is 5.4 years, only 14.5% of photos were taken within 3 years of the sale, and 347 were
+taken after the sale. Checked with 5-fold cross-validation grouped by house (on top of the
+house-record model):
 
-| Photos taken | Sales | Location only | Location plus photo | Result |
+| Photos taken | Sales | Without photo | With photo | Result |
 |---|---:|---:|---:|---|
-| Within 3 years of the sale | 244 | $334,833 | $337,971 | No measurable difference |
-| 3 to 5 years | 466 | $377,318 | $377,300 | No measurable difference |
-| More than 5 years | 995 | $351,285 | $350,223 | No measurable difference |
-| Within 3 years, photo model trained on those photos only | 244 | $334,833 | $344,473 | No measurable difference |
+| Within 3 years of the sale | 796 | $149,803 | $149,840 | No measurable difference |
+| 3 to 5 years | 1,495 | $157,413 | $156,243 | No measurable difference |
+| More than 5 years | 3,188 | $142,107 | $141,631 | No measurable difference |
+| Within 3 years, photo model trained on those photos only | 796 | $149,803 | $150,424 | No measurable difference |
 
-So photos taken close to the sale did not help either. The date gap does not explain the result on
-its own, although with 244 recent-photo sales a small gain would be hard to detect.
+Recent photos did not help more than old ones.
 
-**Likely reasons (not tested, the author's reading).** Most Mapillary photos are dashcam frames that
-look along the road, not at the house. Many are several years away from the sale date (checked above, it did not change the result). The encoder is a general ImageNet
-network that was never tuned on houses. Only 1,208 training sales have a photo. And much of a house's
-price comes from its interior size and condition, which no street photo shows.
+**Likely reasons the photo adds little (not tested, the author's reading).** Most Mapillary photos
+are dashcam frames that look along the road, not at the house. The image networks were never tuned
+on houses. Much of a house's price comes from its interior, which no street photo shows.
 
 ## Prediction ranges
 
-- **Seattle buy price:** split conformal range. The relative errors on a calibration split (962
-  sales) set the width, and coverage is measured on the test split. The current width, target and
-  measured coverage are in evaluation.md under "Prediction range".
+- **Seattle buy price:** split conformal range. The relative errors on a calibration split set the
+  width, and coverage is measured on the test split. Each Seattle model has its own range (house
+  record: plus or minus 19.3%; with a photo: plus or minus 18.8%; location only: plus or minus
+  38.0%). The details are in evaluation.md under "Prediction range".
 - **San Francisco and Portland buy price, and all rents:** no range. These are area-level figures
   and there are no per-house labels to check a range against. The app says a reliable range is
   unavailable.
@@ -143,11 +170,13 @@ No confidence percentages are invented. Every coverage number shown in the app w
 - Area models are evaluated with every ZIP held out in turn.
 - Scaling, PCA and every other fitted step are fitted on training rows only.
 - One photo is used for one house only, so the same photo cannot be in training and testing.
-- Only sale date and location go into the model. Nothing recorded after the sale is used.
+- The county house record shows today's building. Sales of houses built or renovated in or after
+  the sale year are dropped, so the record never describes a building that did not exist at the sale.
+  Small changes the county did not record as a renovation can still differ from the sold house.
 
 ## Furnished estimates
 
-A photo of the outside cannot show furniture, and the interior size is unknown. HomeLens therefore
+A photo of the outside cannot show furniture, and the county record does not list it. HomeLens therefore
 uses one fixed package for every house, defined in `config/furniture_package.json`.
 
 | Item | Value | Basis |
@@ -170,12 +199,12 @@ evaluation.md). This assumes the ratio is the same in every ZIP of a metro, whic
 
 - Per-house labels exist for Seattle only. Elsewhere the buy price is an area-level figure.
 - Rent is area-level everywhere.
-- Location alone has a large error for individual houses.
+- Location alone has a large error for individual houses. Outside Seattle no house record is used.
+- The county record can be out of date, and the app does not inspect the house.
 - The property type is confirmed by the user, not detected.
 - Street photos are often dashcam frames looking along the road, may be years old, and may show the
-  wrong house. The photo model is not used by the app. If a later version uses one, the app shows the
-  photo and lets the user reject it (this path runs in demo mode today).
-- The photo result is for one encoder, one photo source and one city. It does not show that the
+  wrong house. The app shows the photo it used and lets the user reject it.
+- The photo result is for three encoders, one photo source and one city. It does not show that the
   exterior of a house carries no price information.
 - The served Seattle model is refit on all rows, including the test rows, so its own error is not
   measured directly. The reported error is for the version trained without the test rows.

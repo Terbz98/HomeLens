@@ -21,6 +21,8 @@ const BASIS_TAG = {
 };
 const KIND_TAG = { trained: "Trained model", scenario: "Scenario", demo: "Demo, not real" };
 const MODE_TEXT = {
+  location_plus_house_record_plus_image: "Mode: location, the county record for this house, and a licensed street photo",
+  location_plus_house_record: "Mode: location and the county record for this house. The visible exterior was not analyzed.",
   location_plus_image: "Mode: location plus a licensed street photo",
   location_only: "Mode: location only. The visible exterior was not analyzed.",
   none: "Mode: no estimate",
@@ -243,6 +245,7 @@ export function startPanel({ root, api, maps }) {
       el("figcaption", {},
         el("span", { text: credit + " " }),
         image.page_url ? el("a", { href: image.page_url, target: "_blank", rel: "noopener noreferrer", text: "Open on Mapillary" }) : null),
+      image.message ? el("p", { class: "note", text: image.message }) : null,
       el("button", { type: "button", id: "not-my-house", class: "button",
                      onclick: () => { ui.useImage = false; dispatch({ type: "estimate", useImage: false }); } },
         "This photo is not my house"),

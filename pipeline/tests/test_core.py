@@ -193,3 +193,46 @@ def test_fetch_images_records_provenance_and_coverage(tmp_path):
     spots = fetch_images.area_targets(pd.DataFrame({"zip": ["98103"], "supported_city_id": ["seattle"],
                                                     "lat": [47.67], "lon": [-122.34]}), 5)
     assert len(spots) == 5 and all(s["kind"] == "area_point" for s in spots)
+
+
+def test_harris_features_find_more_corners_on_a_detailed_picture():
+    import io
+
+    import numpy as np
+    from PIL import Image
+
+    from core import harris
+
+    def jpeg(array):
+        out = io.BytesIO()
+        Image.fromarray(array.astype("uint8")).save(out, format="PNG")
+        return out.getvalue()
+
+    flat = np.full((240, 320, 3), 128)
+    squares = np.kron((np.indices((6, 8)).sum(axis=0) % 2) * 255, np.ones((40, 40)))   # a checkerboard
+    board = np.stack([squares] * 3, axis=-1)
+    f_flat, f_board = harris.embed_images([jpeg(flat), jpeg(board)])
+    assert f_flat.shape == (harris.EMBEDDING_SIZE,)
+    corners_per_cell = slice(0, None, 4)                 # the first of the four numbers in each grid cell
+    assert f_board[corners_per_cell].sum() > 0
+    assert f_flat[corners_per_cell].sum() == 0           # a flat image has no corners
+    assert f_board[1::4].mean() > f_flat[1::4].mean()    # and much weaker gradients
+
+
+def test_house_record_lookup_and_description():
+    import pandas as pd
+
+    from core import house_features
+
+    row = {c: 1.0 for c in house_features.FEATURE_COLUMNS}
+    row.update(living_sqft=1850.0, year_built=1925.0, year_renovated=0.0, grade=7.0, condition=3.0,
+               bedrooms=3.0, bathrooms=1.75, lot_sqft=4000.0, view_score=0.0, waterfront=0.0)
+    table = pd.DataFrame([dict(row, property_id="0000000001"),
+                          dict(row, property_id="0000000002", living_sqft=float("nan"))]).set_index("property_id")
+    found = house_features.lookup(table, "0000000001")
+    assert found["living_sqft"] == 1850.0
+    assert house_features.lookup(table, "0000000002") is None       # incomplete record
+    assert house_features.lookup(table, "9999999999") is None       # unknown parcel
+    assert house_features.lookup(None, "0000000001") is None
+    text = house_features.describe(found)
+    assert "1,850 sq ft living area" in text and "built 1925" in text and "renovated" not in text

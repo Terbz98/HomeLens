@@ -14,14 +14,15 @@ of current market prices. They are not appraisals, forecasts or guarantees.
 **Supported:** detached single-family homes in Seattle, San Francisco and Portland. Anything else is
 reported as unsupported.
 
-**You never enter** bedrooms, bathrooms, floor area or interior details. The only inputs are the
-location of the house and, where a licensed one exists and a photo model is served, a street photo.
+**You never enter** bedrooms, bathrooms, floor area or interior details. For Seattle the app looks
+these up in King County's public record for the house you confirmed, so two neighbouring houses get
+different prices. Where a licensed street photo exists, the photo is analyzed too.
 
 ## What each number really is
 
 | Estimate | Seattle | San Francisco, Portland |
 |---|---|---|
-| Buy, without furniture | Per-house model trained on real King County sale records | Area-level: typical single-family home value near that spot (Zillow ZIP values) |
+| Buy, without furniture | Per-house model trained on real King County sale records, using the house's location, its county record and a street photo | Area-level: typical single-family home value near that spot (Zillow ZIP values) |
 | Rent, without furniture | Area-level: Zillow ZIP rent index, scaled to single-family homes | same |
 | Buy, with furniture | The number above plus the assumed resale value of one fixed furniture package | same |
 | Rent, with furniture | The number above plus a scenario amount per month | same |
@@ -99,7 +100,7 @@ Photos come from Mapillary, not from Google (see [docs/licensing.md](docs/licens
 Mapillary client token in `.env` as `MAPILLARY_TOKEN=...`, then:
 
 ```bash
-python -m pipeline.fetch_images --houses 3000 --area-points 12
+python -m pipeline.fetch_images --houses 10000 --area-points 12
 ```
 
 ```bash
@@ -114,9 +115,13 @@ python -m pipeline.train
 python -m pipeline.evaluate
 ```
 
-The photo model is used by the app only if it lowers the error on held-out sales by at least 2%.
-In the current run it did not (the difference was 0.04%), so the app gives location-only estimates.
-The full result is in [docs/evaluation.md](docs/evaluation.md) and [docs/model_card.md](docs/model_card.md).
+`embed_images` turns each photo into numbers with three encoders (ResNet18, ConvNeXt-Tiny, and Harris
+corner features from DSP Lab 7). Training keeps the one with the lowest cross-validated error.
+
+By default the app uses the photo model whenever a photo is found and shows its measured effect next
+to the estimate. Set `HOMELENS_PHOTO_MODEL=auto` in `.env` to use it only when it lowered the error by
+at least 2% in training, or `off` to never use it. The full result is in
+[docs/evaluation.md](docs/evaluation.md) and [docs/model_card.md](docs/model_card.md).
 
 ## 3. Start the backend
 
@@ -217,13 +222,14 @@ It does not ask for `tabs`, `history`, `activeTab`, `storage` or access to all s
 
 - San Francisco and Portland buy prices, and all rents, are area-level figures. Free per-house labels
   were only available for Seattle.
-- Location alone is a weak predictor of one house's price. See the measured error in
+- Location alone is a weak predictor of one house's price. In Seattle the county house record fixes
+  most of that (median error 9.2% instead of 20.6%). Outside Seattle there is no house record. See
   [docs/evaluation.md](docs/evaluation.md).
 - Property type is confirmed by you. HomeLens does not detect it.
-- The photo model did not beat the location-only model, so every real estimate is location-only.
-  Street photo coverage is also uneven: 56.8% of sampled Seattle houses had a usable photo.
-  Photos are often years away from the sale date (median 5.4 years). Photos within 3 years of the sale
-  did not help either (see the photo date experiment in [docs/evaluation.md](docs/evaluation.md)).
+- Street photos add a small measurable gain over location alone, but no measurable gain once the
+  county house record is used. Coverage is uneven: 57.6% of Seattle houses had a usable photo.
+  Photos are often years away from the sale date (median 5.4 years), and recent photos did not help
+  more (see the photo date experiment in [docs/evaluation.md](docs/evaluation.md)).
 - Google Street View images are never read, stored or sent to a model. That part of the original
   idea is blocked by Google's terms. See [docs/licensing.md](docs/licensing.md).
 - The backend is meant to run on your own computer. It has no accounts and no HTTPS.

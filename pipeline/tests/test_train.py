@@ -64,6 +64,29 @@ def test_photo_date_experiment_reports_every_bucket(demo_run):
         assert "not served" in report["description"]
 
 
+def test_sales_of_houses_rebuilt_or_renovated_after_the_sale_are_dropped():
+    from core.house_features import FEATURE_COLUMNS
+    sales = pd.DataFrame({"property_id": ["A", "B", "C"], "record_date": ["2024-05-01", "2024-05-01", "2024-05-01"]})
+    base = {c: 1.0 for c in FEATURE_COLUMNS}
+    features = pd.DataFrame([dict(base, year_built=1950, year_renovated=0),        # fine
+                             dict(base, year_built=2025, year_renovated=0),        # built after the sale
+                             dict(base, year_built=1950, year_renovated=2024)],    # renovated in the sale year
+                            index=pd.Index(["A", "B", "C"], name="property_id"))
+    kept, counts = train.with_house_features(sales, features)
+    assert list(kept["property_id"]) == ["A"]
+    assert counts["built_or_renovated_in_or_after_the_sale_year_removed"] == 2
+
+
+def test_house_record_model_is_trained_and_compared_on_the_same_rows(demo_run):
+    _, manifest = demo_run
+    house = manifest["metrics"]["seattle_house"]
+    assert house["status"] == "trained" and house["houses_in_both_training_and_test"] == 0
+    assert {"house_model", "location_only_same_rows"} <= set(house["test"])
+    assert house["test"]["house_model"]["n"] == house["test"]["location_only_same_rows"]["n"]
+    assert manifest["metrics"]["seattle_photo"]["base_model"] == "location_plus_house_record"
+    assert manifest["metrics"]["seattle_photo_location"]["status"] == "trained"
+
+
 def test_xyz_distance_matches_ground_distance():
     a = (47.6561, -122.3560)
     b = (47.6565, -122.3568)

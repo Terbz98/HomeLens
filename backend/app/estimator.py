@@ -8,7 +8,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 import joblib
 import numpy as np
 
-from core import furniture
+from core import furniture, house_features
 from core.features import RENT_PRICE_LIMITS, SALE_PRICE_LIMITS, is_valid_price
 from core.imagery import ExteriorImage, ImageryError, ImageryProvider
 
@@ -31,9 +31,9 @@ def _round_to(value: float, step: int) -> int:
     return int(round(value / step) * step)
 
 
-def _default_embed(jpeg_bytes: bytes) -> np.ndarray:
+def _default_embed(jpeg_bytes: bytes, encoder: str = "resnet18") -> np.ndarray:
     from core.embed import embed_image  # imported late: torch is slow to load
-    return embed_image(jpeg_bytes)
+    return embed_image(jpeg_bytes, encoder)
 
 
 class Estimator:
@@ -44,8 +44,10 @@ class Estimator:
     """
 
     def __init__(self, bundle: Optional[Dict], provider: ImageryProvider, package: Dict, demo: bool,
-                 embed_fn: Callable[[bytes], np.ndarray] = _default_embed):
+                 embed_fn: Callable[..., np.ndarray] = _default_embed, house_table=None, photo_mode: str = "on"):
         self.bundle = bundle
+        self.house_table = house_table
+        self.photo_mode = photo_mode
         self.provider = provider
         self.package = package
         self.demo = demo
@@ -55,10 +57,12 @@ class Estimator:
             raise ValueError("model bundle kind does not match the server mode")
 
     @classmethod
-    def from_dir(cls, model_dir: Path, provider: ImageryProvider, package: Dict, demo: bool) -> "Estimator":
+    def from_dir(cls, model_dir: Path, provider: ImageryProvider, package: Dict, demo: bool,
+                 house_features_path: Optional[Path] = None, photo_mode: str = "on") -> "Estimator":
         path = Path(model_dir) / "bundle.joblib"
         bundle = joblib.load(path) if path.exists() else None
-        return cls(bundle, provider, package, demo)
+        table = house_features.load_table(house_features_path) if house_features_path else None
+        return cls(bundle, provider, package, demo, house_table=table, photo_mode=photo_mode)
 
     # ------------------------------------------------------------ status helpers
 
@@ -77,13 +81,35 @@ class Estimator:
     def has_per_house_model(self, city: Dict) -> bool:
         return bool(self.bundle and city.get("per_house_sales") and self.bundle.get("seattle_sale"))
 
+    def _photo_allowed(self, photo: Optional[Dict]) -> bool:
+        if not photo or self.photo_mode == "off":
+            return False
+        return self.photo_mode == "on" or bool(photo.get("serve"))
+
     def photo_model_served(self, city: Dict) -> bool:
         photo = self.bundle.get("seattle_photo") if self.bundle else None
-        return bool(self.has_per_house_model(city) and photo and photo.get("serve"))
+        return bool(self.has_per_house_model(city) and self._photo_allowed(photo))
+
+    def house_record(self, property_id: Optional[str]) -> Optional[Dict]:
+        """The county facts for this parcel, when a house-record model exists and the parcel is known."""
+        if not (self.bundle and self.bundle.get("seattle_house")):
+            return None
+        return house_features.lookup(self.house_table, property_id)
+
+    def _photo_effect_text(self) -> str:
+        """One sentence on what photos did in testing, from the training report."""
+        report = (self.manifest or {}).get("metrics", {}).get("seattle_photo", {})
+        c = report.get("test_comparison")
+        if not c:
+            return ""
+        change = c["mae_lowered_by_usd"]
+        return (" In testing, adding the photo %s the average error by $%s (%s)."
+                % ("lowered" if change >= 0 else "raised", format(int(round(abs(change))), ","), c["verdict"]))
 
     # ------------------------------------------------------------ the photo step
 
-    def _photo_adjustment(self, lat: float, lon: float, city: Dict, use_image: bool) -> Tuple[Dict, Optional[float]]:
+    def _photo_adjustment(self, lat: float, lon: float, city: Dict, use_image: bool,
+                          base_name: str = "location_only") -> Tuple[Dict, Optional[float]]:
         """Try to get a photo-based adjustment factor for the location-only price.
 
         Returns (image info for the response, factor or None).
@@ -94,9 +120,14 @@ class Estimator:
         if photo is None:
             return {"status": "no_photo_model",
                     "message": "No photo model has been trained for this city, so the visible exterior was not analyzed."}, None
-        if not photo.get("serve"):
+        if not self._photo_allowed(photo):
             return {"status": "no_photo_model",
-                    "message": "The photo model did not beat the location-only model in testing, so it is not used."}, None
+                    "message": "The photo model did not beat the model without photos in testing, so it is not used."}, None
+        if photo.get("base", "location_only") != base_name:
+            # The photo model corrects one particular sale model. It is not valid on top of another one.
+            return {"status": "no_photo_model",
+                    "message": "No county record was found for this house, so the photo model, which corrects the "
+                               "house-record model, was not used."}, None
         if not self.provider.configured:
             return {"status": "not_configured",
                     "message": "No licensed imagery source is set up on the server, so the visible exterior was not analyzed."}, None
@@ -109,14 +140,15 @@ class Estimator:
             return {"status": "unavailable",
                     "message": "No licensed street photo was found close enough to this house."}, None
         try:
-            embedding = self._embed(self.provider.download(image))
+            embedding = self._embed(self.provider.download(image), photo.get("encoder", "resnet18"))
             factor = float(math.exp(float(photo["residual_model"].predict(np.asarray(embedding).reshape(1, -1))[0])))
         except Exception as exc:  # any failure here falls back to location only
             log.warning("photo step failed: %s", type(exc).__name__)
             return {"status": "error", "message": "The photo could not be analyzed. Location only was used."}, None
         if not (math.isfinite(factor) and 0.2 <= factor <= 5.0):
             return {"status": "error", "message": "The photo model gave an unusable result. Location only was used."}, None
-        return self._image_info(image, "used", "This licensed street photo was analyzed for the estimate."), factor
+        return self._image_info(image, "used", "This licensed street photo was analyzed for the estimate."
+                                + self._photo_effect_text()), factor
 
     @staticmethod
     def _image_info(image: ExteriorImage, status: str, message: str) -> Dict:
@@ -157,7 +189,8 @@ class Estimator:
             "explanation": explanation if ok else "The model did not produce a usable number for this location.",
         }
 
-    def estimate(self, lat: float, lon: float, city: Dict, metro_id: Optional[str], use_image: bool = True) -> Dict:
+    def estimate(self, lat: float, lon: float, city: Dict, metro_id: Optional[str], use_image: bool = True,
+                 property_id: Optional[str] = None) -> Dict:
         """Build the estimate block for a house in a supported city."""
         if not self.loaded:
             raise RuntimeError("no models are loaded")
@@ -167,7 +200,6 @@ class Estimator:
                         "ZIP center points: US Census Bureau Gazetteer."]
         limitations = [
             "These are estimates of current market prices. They are not appraisals, forecasts or guarantees.",
-            "Nothing about the inside of the house is known or used: no bedrooms, bathrooms, floor area or condition.",
             "A photo of the outside cannot show furniture. The furnished numbers add one fixed, assumed furniture package.",
         ]
 
@@ -175,18 +207,37 @@ class Estimator:
         mode = "location_only"
         sale_period = "Zillow home values for %s" % period["area_sale_month"]
         if self.has_per_house_model(city):
-            sale = self.bundle["seattle_sale"]
-            base = float(sale["model"].predict(np.array([[lat, lon, sale["time_index"]]]))[0])
-            image_info, factor = self._photo_adjustment(lat, lon, city, use_image)
+            record = self.house_record(property_id)
+            if record is not None:
+                sale = self.bundle["seattle_house"]
+                row = [lat, lon, sale["time_index"]] + [record[c] for c in sale["feature_cols"]]
+                base_name = "location_plus_house_record"
+                mode = "location_plus_house_record"
+                limitations.append("Facts about the house (living area, rooms, grade, condition) come from the "
+                                   "King County record for this parcel, not from an inspection. The record can be "
+                                   "out of date.")
+            else:
+                sale = self.bundle["seattle_sale"]
+                row = [lat, lon, sale["time_index"]]
+                base_name = "location_only"
+                limitations.append("No county record was matched to this house, so nothing about the building "
+                                   "itself is used: no floor area, rooms or condition.")
+            base = float(sale["model"].predict(np.array([row]))[0])
+            image_info, factor = self._photo_adjustment(lat, lon, city, use_image, base_name)
             spec = sale["interval"]
             if factor is not None:
                 base *= factor
-                mode = "location_plus_image"
+                mode = "location_plus_house_record_plus_image" if record is not None else "location_plus_image"
                 spec = self.bundle["seattle_photo"]["interval"]
             buy = _round_to(base, 1000) if is_valid_price(base, *SALE_PRICE_LIMITS) else None
             buy_basis = "per_house_model"
-            buy_text = ("Predicted for this house from real %s sale records. Inputs: its location%s."
-                        % (city["name"], " and a licensed street photo" if factor is not None else ""))
+            inputs = ["its location"]
+            if record is not None:
+                inputs.append("its county record (%s)" % house_features.describe(record))
+            if factor is not None:
+                inputs.append("a licensed street photo")
+            buy_text = ("Predicted for this house from real %s sale records. Inputs: %s."
+                        % (city["name"], ", ".join(inputs[:-1]) + " and " + inputs[-1] if len(inputs) > 1 else inputs[0]))
             buy_interval = self._interval(buy, spec) if buy else None
             buy_note = ("About %.0f%% of test houses sold inside a range this wide." % (100 * spec["measured_coverage_on_test"])
                         if buy_interval else NO_RANGE_FEW_ROWS)
@@ -206,7 +257,8 @@ class Estimator:
                               "message": "No photo model is available for this city, so the visible exterior was not analyzed."}
             else:
                 image_info = {"status": "not_requested", "message": "You asked for a location-only estimate."}
-            limitations.append("For this city the buy price is an area-level figure, not a value for this specific house.")
+            limitations.append("For this city the buy price is an area-level figure, not a value for this specific house. "
+                               "Nothing about the building itself is used.")
 
         # ---- rent
         area_rent = self.bundle.get("area_rent")

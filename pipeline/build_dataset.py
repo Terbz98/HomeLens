@@ -9,6 +9,7 @@ Outputs in data/processed:
     metro_rent_ratio.json single-family rent divided by all-homes rent, per metro (Zillow)
     seattle_sales.csv     one row per real single-family sale in Seattle (King County), import schema
     seattle_parcels.csv   address and coordinates of Seattle single-family parcels
+    seattle_house_features.csv  King County building and parcel facts per Seattle parcel (core/house_features.py)
     validation_report.json results of every data check
 """
 import json
@@ -20,6 +21,7 @@ from typing import Dict, List, Tuple
 import numpy as np
 import pandas as pd
 
+from core import house_features
 from core.geo import load_cities, tidy_street
 from core.paths import PROCESSED_DIR, RAW_DIR
 from pipeline import schema
@@ -249,6 +251,18 @@ def main() -> int:
     cleaned = cleaned[schema.REQUIRED_COLUMNS + ["furnished"]]
     cleaned.to_csv(PROCESSED_DIR / "seattle_sales.csv", index=False)
     parcels.to_csv(PROCESSED_DIR / "seattle_parcels.csv", index=False)
+
+    print("Building per-house facts from King County building and parcel records")
+    features = house_features.read_king_county(RAW_DIR)
+    features = features[features.index.isin(parcels["property_id"])]
+    features.to_csv(PROCESSED_DIR / "seattle_house_features.csv")
+    report["seattle_house_features"] = {
+        "parcels": int(len(parcels)),
+        "parcels_with_a_building_record": int(len(features)),
+        "sales_with_a_building_record": int(cleaned["property_id"].isin(features.index).sum()),
+        "missing_values_per_column": {c: int(features[c].isna().sum()) for c in house_features.FEATURE_COLUMNS},
+    }
+    print("Parcels with a building record: %d of %d" % (len(features), len(parcels)))
 
     with open(PROCESSED_DIR / "validation_report.json", "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2)

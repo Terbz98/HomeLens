@@ -144,6 +144,38 @@ def make_images(sales: pd.DataFrame, rng: np.random.Generator) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def make_house_features(sales: pd.DataFrame, seed: int) -> pd.DataFrame:
+    """Invented county-style house records for the synthetic sales.
+
+    Living area is made to follow the part of each synthetic price that
+    location and time do not explain, so the house-record model has something
+    to find. A separate random generator is used so the other fixtures stay
+    exactly as they were.
+    """
+    rng = np.random.default_rng(seed)
+    first = sales.drop_duplicates("property_id").set_index("property_id")
+    n = len(first)
+    size_signal = first["brightness"].to_numpy()                 # the hidden price factor of the fixtures
+    living = np.round(900 + 2600 * size_signal + rng.normal(0, 120, n), -1)
+    df = pd.DataFrame({
+        "living_sqft": living,
+        "grade": np.clip(np.round(6 + 4 * size_signal + rng.normal(0, 0.5, n)), 4, 12),
+        "year_built": rng.integers(1905, 2015, n),
+        "year_renovated": 0,
+        "condition": rng.integers(2, 6, n),
+        "bedrooms": np.clip(np.round(living / 650), 1, 7),
+        "bathrooms": np.clip(np.round(living / 900 * 2) / 2, 1, 5),
+        "stories": rng.choice([1.0, 1.5, 2.0], n),
+        "basement_sqft": np.round(rng.uniform(0, 600, n), -1),
+        "buildings_on_parcel": 1,
+        "lot_sqft": np.round(rng.uniform(2500, 9000, n), -1),
+        "view_score": rng.choice([0, 0, 0, 2], n),
+        "waterfront": 0,
+    }, index=first.index)
+    df.index.name = "property_id"
+    return df
+
+
 def main() -> int:
     rng = np.random.default_rng(SEED)
     FIXTURES_DIR.mkdir(parents=True, exist_ok=True)
@@ -153,6 +185,7 @@ def main() -> int:
     zips.to_csv(FIXTURES_DIR / "synthetic_zip_values.csv", index=False)
     sales.drop(columns=["brightness"]).to_csv(FIXTURES_DIR / "synthetic_seattle_sales.csv", index=False)
     images.to_csv(FIXTURES_DIR / "synthetic_image_matches.csv", index=False)
+    make_house_features(sales, SEED + 1).to_csv(FIXTURES_DIR / "synthetic_house_features.csv")
     # Embeddings of the synthetic images, so tests and demo mode do not need to run the encoder.
     from pipeline.embed_images import embed_files
     embedding_path = FIXTURES_DIR / "synthetic_image_embeddings.npz"

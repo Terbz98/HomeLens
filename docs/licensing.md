@@ -10,12 +10,13 @@ Terms were read on 2026-11-11. This is a student's reading of the terms, not leg
 | Zillow Research (ZHVI, ZORI) | Area-level labels | No | Allowed with attribution |
 | King County Assessor sales | Per-house sale labels, Seattle | No | Public record, non-commercial use, names dropped |
 | King County GIS parcels | House positions and addresses, Seattle | No | Public open data, owner fields never requested |
+| King County Assessor building and parcel records | Facts about each Seattle house (living area, grade, age, rooms, lot, view) | No | Public record, non-commercial use, no names loaded |
 | US Census ZCTA Gazetteer | ZIP center points | No | Public domain |
 | OpenStreetMap Nominatim | Address lookup at run time | No | Allowed with attribution, light use |
 | US Census geocoder | Address lookup at run time | No | Public service |
 | Mapillary | Exterior photos for training and prediction | No | CC BY-SA 4.0, attribution shown |
 | Google Maps and Street View imagery | **Not used** | No | **Blocked by Google's terms** |
-| torchvision ResNet18 weights | Fixed photo encoder | No | See below |
+| torchvision ResNet18 and ConvNeXt-Tiny weights | Fixed photo encoders | No | See below |
 
 ## Google Maps and Street View: what is blocked and why
 
@@ -64,6 +65,9 @@ Publishing it in the Chrome Web Store would need this question answered by Googl
   files are public records and that Washington law, RCW 42.56.070(9), prohibits using lists of
   individuals for commercial purposes. HomeLens is non-commercial coursework, and buyer and seller
   names are never loaded (`pipeline/build_dataset.py`, `read_sales`).
+- **Assessor data download** (Residential Building and Parcel): same download page and disclaimer.
+  Only building facts (area, grade, year built, condition, rooms) and parcel facts (lot size, view,
+  waterfront) are read. The parcel file's name fields are never loaded (`core/house_features.py`).
 - **GIS Open Data** (parcels with address): only parcel number, address, ZIP and coordinates are
   requested, and only for Seattle single-family parcels. Owner and taxpayer fields are never requested.
 - Neither file is committed.
@@ -91,8 +95,9 @@ stored.
 
 ## Model weights
 
-The photo encoder is torchvision's ResNet18 with `IMAGENET1K_V1` weights, used unchanged as a
-feature extractor. torchvision is BSD-3-Clause. The weights were trained on ImageNet, whose images
+The photo encoders are torchvision's ResNet18 and ConvNeXt-Tiny, both with `IMAGENET1K_V1` weights,
+used unchanged as feature extractors. The third encoder, Harris corner features, is this project's own
+code (`core/harris.py`) and has no weights. torchvision is BSD-3-Clause. The weights were trained on ImageNet, whose images
 are provided for non-commercial research and educational use. That fits this coursework. A
 commercial version would need an encoder with clearly commercial terms.
 

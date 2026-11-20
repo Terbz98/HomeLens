@@ -1,6 +1,6 @@
 # Three-minute project proposal script
 
-About 470 words, which is a little over three minutes at a calm speaking pace. Every figure is copied from
+About 500 words, which is a little over three minutes at a calm speaking pace. Every figure is copied from
 [evaluation.md](evaluation.md).
 
 ---
@@ -10,8 +10,8 @@ About 470 words, which is a little over three minutes at a calm speaking pace. E
 When you look at a house on Google Maps, you can see it, but you cannot tell what it costs. HomeLens
 is a Chrome extension that answers that. You click a house, confirm the address, and a side panel
 shows four numbers: the price to buy it and the monthly rent, each with and without furniture. You
-do not type in bedrooms or floor area. The app only needs to know where the house is. We also tested
-whether a street photo of the outside makes the estimate better.
+do not type in bedrooms or floor area. For Seattle the app looks them up in the county's public
+record of the house. We also tested whether a street photo of the outside makes the estimate better.
 
 **[0:35] The data**
 
@@ -23,21 +23,21 @@ feeding Street View images to a model, so our photos come from Mapillary, which 
 
 **[1:10] The models**
 
-We compare three levels. First a simple baseline, such as the city median. Second a location-only
-model: nearest neighbors on latitude and longitude. Third a location-plus-photo model, where a
-pretrained network turns the photo into numbers and a regression uses them to correct the location
-estimate. To avoid leakage, we train on older sales and test on the newest ones, and no house
-appears on both sides.
+We compare four levels. First a simple baseline, such as the city median. Second location only:
+nearest neighbors on latitude and longitude. Third location plus the county's public record of the
+house, such as living area, building grade and age, in a gradient boosted tree model. Fourth, a
+street photo on top: a pretrained image network, or the Harris corner detector from our DSP lab,
+turns the photo into numbers that correct the estimate. We train on older sales and test on the
+newest ones, and no house appears on both sides.
 
 **[1:45] Results**
 
-On 1,931 Seattle sales the model never saw, the city-median baseline is off by $517,088 on average.
-The location-only model is off by $363,904. The median price is $1,125,000, so location alone is
-still wrong by about a third. Does the photo close that gap? Mapillary had a usable photo for 57
-percent of the houses we sampled. On the 327 test sales with a photo, location only is off by
-$403,927 and location plus photo by $403,728. That is $200 better, which is far inside the noise.
-So our measured answer is no: with dashcam street photos and a general-purpose image network, the
-photo did not help, and the app keeps using location only.
+On the newest 1,931 Seattle sales, which the models never saw, the city median is off by $517,088
+on average and location only by $363,904. With the house record, on almost the same 1,896 sales, the
+error drops to $163,388, a typical miss of 9.2 percent, so neighbouring houses finally get different
+prices. Do photos add anything? On top
+of location only, a small but real gain: from $403,273 to $400,472. On top of the house record, no
+measurable difference. Recent photos did not help more than old ones.
 
 **[2:20] Being honest about the numbers**
 
@@ -50,4 +50,4 @@ its measured coverage is shown next to it.
 **[2:50] Close**
 
 HomeLens runs today: the extension, the backend, the trained models and the tests. The next step
-would be photos that face the house and a network tuned on houses. Thank you.
+would be photos that face the house and an image network tuned on houses. Thank you.

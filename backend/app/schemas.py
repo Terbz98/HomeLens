@@ -198,7 +198,8 @@ class EstimateResponse(BaseModel):
     message: str
     client_request_id: str
     property: PropertyInfo
-    prediction_mode: Literal["location_plus_image", "location_only", "none"]
+    prediction_mode: Literal["location_plus_house_record_plus_image", "location_plus_house_record",
+                             "location_plus_image", "location_only", "none"]
     result_kind: Literal["trained", "demo", "none"]
     is_demo: bool
     estimates: List[Estimate]

@@ -26,6 +26,9 @@ MODEL_NAMES = {
     "location_only": "Location only (chosen model)",
     "location_only_on_those_rows": "Location only (chosen model), same rows as the Zillow baseline",
     "location_plus_photo": "Location plus photo",
+    "house_model": "Location plus house record (chosen model)",
+    "location_only_same_rows": "Location only, same rows",
+    "house_model_on_those_rows": "Location plus house record, same rows as the Zillow baseline",
 }
 
 
@@ -43,10 +46,11 @@ def _label(name: str) -> str:
     return name
 
 
-def _table(rows: Dict[str, Dict]) -> List[str]:
+def _table(rows: Dict[str, Dict], names: Dict[str, str] = None) -> List[str]:
+    names = names or {}
     lines = ["| Model | Rows | MAE | RMSE |", "|---|---:|---:|---:|"]
     for name, m in rows.items():
-        lines.append("| %s | %d | %s | %s |" % (_label(name), m["n"], money(m["mae"]), money(m["rmse"])))
+        lines.append("| %s | %d | %s | %s |" % (names.get(name, _label(name)), m["n"], money(m["mae"]), money(m["rmse"])))
     return lines
 
 
@@ -87,13 +91,22 @@ def area_section(title: str, unit: str, report: Dict) -> List[str]:
     return lines
 
 
-def sale_section(report: Dict) -> List[str]:
-    lines = ["## Seattle per-house sale price", ""]
+def sale_section(report: Dict, title: str = "Seattle per-house sale price") -> List[str]:
+    lines = ["## %s" % title, ""]
     if report.get("status") != "trained":
-        return lines + ["Not trained: %s." % report.get("status", "unknown"), ""]
+        return lines + ["Not trained: %s. %s" % (report.get("status", "unknown"), report.get("reason", "")), ""]
     s = report["splits"]
     lines += [
         "Label: completed sale price of a single-family house (King County public record). %d sales." % report["n_rows"],
+        "Inputs: %s." % ", ".join(report.get("inputs", [])),
+    ]
+    counts = report.get("row_counts")
+    if counts:
+        lines.append("Sales with a complete house record: %d. Removed because the house was built or renovated in or "
+                     "after the sale year (the record describes a different building): %d." % (
+                         counts["with_a_complete_house_record"],
+                         counts["built_or_renovated_in_or_after_the_sale_year_removed"]))
+    lines += [
         "",
         "| Split | Rows | From | To |",
         "|---|---:|---|---|",
@@ -113,6 +126,9 @@ def sale_section(report: Dict) -> List[str]:
         "Test split (median sale price %s):" % money(report["test_median_sale_price"]),
         "",
     ] + _table(report["test"]) + [""]
+    if "test_median_percent_error" in report:
+        lines += ["Median error as a share of the sale price on the test split: %.1f%%." % (
+            100 * report["test_median_percent_error"]), ""]
     interval = report["interval"]
     if "relative_half_width" in interval:
         lines += [
@@ -128,11 +144,25 @@ def sale_section(report: Dict) -> List[str]:
     return lines
 
 
-def photo_section(report: Dict) -> List[str]:
-    lines = ["## Seattle photo model (location plus exterior photo)", ""]
+def photo_section(report: Dict, title: str = "Seattle photo model (location plus exterior photo)",
+                  base: str = "Location only", used_by_app: bool = True) -> List[str]:
+    lines = ["## %s" % title, ""]
     status = report.get("status")
     if status != "trained":
         return lines + ["Not trained: %s. %s" % (status, report.get("reason", "")), ""]
+    names = {"location_only": "%s (no photo)" % base, "location_plus_photo": "%s plus photo" % base}
+    compared = report.get("encoders_compared")
+    if compared:
+        lines += ["Photo encoders compared. The encoder is chosen by grouped cross-validation on the training rows, "
+                  "never on the test rows.", "",
+                  "| Encoder | Cross-validated MAE without photo | With photo | Test MAE without photo | With photo | Test result |",
+                  "|---|---:|---:|---:|---:|---|"]
+        for name, r in compared.items():
+            cv, t = r["cross_validation_mae_on_fit_rows"], r["test_rows_with_photo"]
+            lines.append("| %s | %s | %s | %s | %s | %s |" % (
+                r["encoder"], money(cv["location_only"]), money(cv["location_plus_photo"]),
+                money(t["location_only"]["mae"]), money(t["location_plus_photo"]["mae"]), r["test_comparison"]["verdict"]))
+        lines += ["", "Chosen encoder: %s." % report["encoder"], ""]
     lines += [
         "Encoder: %s, used as a fixed feature extractor." % report["encoder"],
         "Sales of houses with a matched photo per split: %s (all sales: %s)." % (
@@ -142,15 +172,24 @@ def photo_section(report: Dict) -> List[str]:
         "",
         "Test split, only houses that have a photo:",
         "",
-    ] + _table(report["test_rows_with_photo"]) + [
+    ] + _table(report["test_rows_with_photo"], names) + [
         "",
         "Did the photo help on the test split? %s" % _comparison(report["test_comparison"]),
         "",
-        "On the calibration split the photo lowered the MAE by %.2f%%." % (100 * report["calibration_mae_lowered_by_share"]),
-        "Is the photo model served by the app? %s (%s)." % (
-            "Yes" if report["serve_photo_model"] else "No", report["serve_rule"]),
-        "",
+        "On the calibration split the photo %s the MAE by %.2f%%." % (
+            "lowered" if report["calibration_mae_lowered_by_share"] >= 0 else "raised",
+            100 * abs(report["calibration_mae_lowered_by_share"])),
     ]
+    if used_by_app:
+        lines += [
+            "Did it pass the rule for automatic use? %s (%s). The app uses the photo model anyway when "
+            "HOMELENS_PHOTO_MODEL is on, which is the default, and the panel shows the test result above next to "
+            "the estimate. With HOMELENS_PHOTO_MODEL=auto the app follows the rule." % (
+                "Yes" if report["serve_photo_model"] else "No", report["serve_rule"]),
+            "",
+        ]
+    else:
+        lines += ["This version is for comparison only. The app does not use it.", ""]
     interval = report["interval"]
     if "relative_half_width" in interval:
         lines += [
@@ -177,7 +216,7 @@ def coverage_section(coverage: Dict) -> List[str]:
     return lines + [""]
 
 
-def photo_date_section(report: Dict) -> List[str]:
+def photo_date_section(report: Dict, base: str = "Location only") -> List[str]:
     lines = ["## Photo date experiment (does a photo taken near the sale date help?)", ""]
     if report.get("status") != "trained":
         return lines + ["Not run: %s. %s" % (report.get("status"), report.get("reason", "")), ""]
@@ -191,9 +230,10 @@ def photo_date_section(report: Dict) -> List[str]:
         "Photo model recipe: `%s` (the one chosen for the Seattle photo model)." % report["photo_model"], "",
         "A. Photo model trained on all photos, errors by time between sale and photo:", "",
     ]
+    names = {"location_only": "%s (no photo)" % base, "location_plus_photo": "%s plus photo" % base}
     for name, block in report["trained_on_all_photos"].items():
         rows = {k: v for k, v in block.items() if k != "comparison"}
-        lines += ["%s:" % name.capitalize(), ""] + _table(rows) + [""]
+        lines += ["%s:" % name.capitalize(), ""] + _table(rows, names) + [""]
         if block["comparison"]:
             lines += ["Did the photo help? %s" % _comparison(block["comparison"]), ""]
         else:
@@ -201,7 +241,7 @@ def photo_date_section(report: Dict) -> List[str]:
     close = report["trained_on_close_photos_only"]
     lines += ["B. Photo model trained and scored only on photos taken within 3 years of the sale:", ""]
     if close:
-        lines += _table({k: v for k, v in close.items() if k != "comparison"}) + [
+        lines += _table({k: v for k, v in close.items() if k != "comparison"}, names) + [
             "", "Did the photo help? %s" % _comparison(close["comparison"]), ""]
     else:
         lines += ["Too few rows.", ""]
@@ -241,12 +281,24 @@ def render(manifest: Dict) -> str:
     ]
     lines += area_section("Area model: typical single-family home value", "USD", metrics["area_sale"])
     lines += area_section("Area model: monthly rent index, all home types", "USD per month", metrics["area_rent"])
-    lines += sale_section(metrics["seattle_sale"])
+    lines += sale_section(metrics["seattle_sale"], "Seattle per-house sale price, location only")
+    if "seattle_house" in metrics:
+        lines += sale_section(metrics["seattle_house"], "Seattle per-house sale price, location plus the house record")
     if manifest.get("photo_coverage"):
         lines += coverage_section(manifest["photo_coverage"])
-    lines += photo_section(metrics["seattle_photo"])
+    served_base = metrics["seattle_photo"].get("base_model", "location_only")
+    if served_base == "location_plus_house_record":
+        lines += photo_section(metrics["seattle_photo"], "Seattle photo model on top of the house-record model (used by the app)",
+                               "Location plus house record")
+    else:
+        lines += photo_section(metrics["seattle_photo"])
+    if "seattle_photo_location" in metrics:
+        lines += photo_section(metrics["seattle_photo_location"],
+                               "Seattle photo model on top of location only (does a photo add anything beyond location?)",
+                               used_by_app=False)
     if "photo_date" in metrics:
-        lines += photo_date_section(metrics["photo_date"])
+        lines += photo_date_section(metrics["photo_date"], "Location plus house record"
+                                    if served_base == "location_plus_house_record" else "Location only")
     if "area_photo" in metrics:
         lines += area_photo_section(metrics["area_photo"])
     lines += ["## Single-family rent ratio", "",

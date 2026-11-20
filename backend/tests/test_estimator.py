@@ -66,8 +66,9 @@ class FakeProvider(ImageryProvider):
         return b"jpeg-bytes"
 
 
-def build(bundle, provider, package, demo=False):
-    return Estimator(bundle, provider, package, demo, embed_fn=lambda data: np.zeros(512, dtype=np.float32))
+def build(bundle, provider, package, demo=False, photo_mode="on", house_table=None):
+    return Estimator(bundle, provider, package, demo, embed_fn=lambda data, encoder="resnet18": np.zeros(512, dtype=np.float32),
+                     house_table=house_table, photo_mode=photo_mode)
 
 
 def card(result, key):
@@ -104,13 +105,74 @@ def test_missing_or_failing_imagery_falls_back_to_location_only(package, provide
     assert buy["interval"]["low_usd"] == 750000               # the location-only range, 25 percent
 
 
-def test_photo_model_that_lost_in_testing_is_not_used_and_no_photo_is_fetched(package):
+@pytest.mark.parametrize("mode", ["auto", "off"])
+def test_photo_model_that_lost_in_testing_is_not_used_in_auto_or_off_mode(package, mode):
     provider = FakeProvider()
-    est = build(make_bundle(photo_residual=math.log(1.10), serve=False), provider, package)
+    est = build(make_bundle(photo_residual=math.log(1.10), serve=False), provider, package, photo_mode=mode)
     result = est.estimate(47.66, -122.34, SEATTLE, "seattle")
     assert result["image"]["status"] == "no_photo_model"
     assert provider.searches == 0
     assert card(result, "buy_unfurnished")["amount_usd"] == 1000000
+
+
+def test_photo_model_is_used_in_on_mode_and_says_what_it_did_in_testing(package):
+    bundle = make_bundle(photo_residual=math.log(1.10), serve=False)
+    bundle["manifest"]["metrics"] = {"seattle_photo": {"test_comparison": {
+        "mae_lowered_by_usd": 200.0, "verdict": "no measurable difference"}}}
+    result = build(bundle, FakeProvider(), package, photo_mode="on").estimate(47.66, -122.34, SEATTLE, "seattle")
+    assert result["image"]["status"] == "used"
+    assert "lowered the average error by $200 (no measurable difference)" in result["image"]["message"]
+    assert card(result, "buy_unfurnished")["amount_usd"] == 1100000
+
+
+RECORD = {"living_sqft": 2000.0, "grade": 8.0, "year_built": 1925.0, "year_renovated": 0.0, "condition": 3.0,
+          "bedrooms": 3.0, "bathrooms": 2.0, "stories": 2.0, "basement_sqft": 0.0, "buildings_on_parcel": 1.0,
+          "lot_sqft": 5000.0, "view_score": 0.0, "waterfront": 0.0}
+
+
+class RowEcho:
+    """A fake model that returns the living area times 600, so the test can see which inputs it got."""
+    def predict(self, X):
+        return np.array([600.0 * X[0][3]])
+
+
+def with_house_model(bundle, base="location_plus_house_record"):
+    import pandas as pd
+    from core.house_features import FEATURE_COLUMNS
+    bundle["seattle_house"] = {"model": RowEcho(), "time_index": 80.0, "interval": INTERVAL,
+                               "feature_cols": FEATURE_COLUMNS}
+    if bundle.get("seattle_photo"):
+        bundle["seattle_photo"]["base"] = base
+    table = pd.DataFrame([dict(RECORD, property_id="1234567890")]).set_index("property_id")
+    return bundle, table
+
+
+def test_county_record_is_used_when_the_parcel_is_known(package):
+    bundle, table = with_house_model(make_bundle())
+    est = build(bundle, FakeProvider(), package, house_table=table)
+    result = est.estimate(47.66, -122.34, SEATTLE, "seattle", property_id="1234567890")
+    buy = card(result, "buy_unfurnished")
+    assert buy["amount_usd"] == 1200000                      # 2,000 sq ft times 600
+    assert "2,000 sq ft living area" in buy["explanation"] and "built 1925" in buy["explanation"]
+    assert result["prediction_mode"] == "location_plus_house_record"
+
+
+def test_unknown_parcel_falls_back_to_location_only_and_skips_the_house_photo_model(package):
+    bundle, table = with_house_model(make_bundle(photo_residual=math.log(1.10)))
+    provider = FakeProvider()
+    result = build(bundle, provider, package, house_table=table).estimate(
+        47.66, -122.34, SEATTLE, "seattle", property_id="0000000000")
+    assert card(result, "buy_unfurnished")["amount_usd"] == 1000000      # the location-only model
+    assert result["image"]["status"] == "no_photo_model" and provider.searches == 0
+    assert result["prediction_mode"] == "location_only"
+
+
+def test_photo_on_top_of_the_county_record(package):
+    bundle, table = with_house_model(make_bundle(photo_residual=math.log(1.10)))
+    result = build(bundle, FakeProvider(), package, house_table=table).estimate(
+        47.66, -122.34, SEATTLE, "seattle", property_id="1234567890")
+    assert result["prediction_mode"] == "location_plus_house_record_plus_image"
+    assert card(result, "buy_unfurnished")["amount_usd"] == 1320000      # 1,200,000 times 1.10
 
 
 def test_user_can_ask_for_location_only(package):

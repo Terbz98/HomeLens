@@ -60,7 +60,9 @@ def create_app(settings: Optional[Settings] = None, estimator: Optional[Estimato
         locator = Locator.from_files(settings.zip_table_path, cities, settings.parcels_path)
     if estimator is None:
         estimator = Estimator.from_dir(settings.model_dir, get_provider(settings.mapillary_token),
-                                       furniture.load_package(), settings.demo)
+                                       furniture.load_package(), settings.demo,
+                                       house_features_path=settings.house_features_path,
+                                       photo_mode=settings.photo_model)
     if geocoder is None:
         geocoder = build_geocoder(settings.geocoders, settings.geocode_timeout_s)
     limiter = RateLimiter(settings.requests_per_minute)
@@ -243,14 +245,21 @@ def create_app(settings: Optional[Settings] = None, estimator: Optional[Estimato
         if not estimator.loaded:
             return _empty_estimate(req, "insufficient_data",
                                    "No trained models were found on the server. Train them or start the server in demo mode.", place)
-        result = estimator.estimate(req.lat, req.lng, city, place["metro_id"], use_image=req.use_image)
+        result = estimator.estimate(req.lat, req.lng, city, place["metro_id"], use_image=req.use_image,
+                                    property_id=req.property_id)
         out = _empty_estimate(req, "location_only", "", place)
         if not result["any_ok"]:
             out["status"] = "insufficient_data"
             out["message"] = "The models could not produce a usable estimate for this location."
-        elif result["prediction_mode"] == "location_plus_image":
+        elif result["prediction_mode"] != "location_only":
             out["status"] = "estimate_ready"
-            out["message"] = "Estimate made from location and a licensed street photo."
+            out["message"] = {
+                "location_plus_image": "Estimate made from location and a licensed street photo.",
+                "location_plus_house_record": ("Estimate made from location and the county record for this house. "
+                                               "The visible exterior was not analyzed."),
+                "location_plus_house_record_plus_image": ("Estimate made from location, the county record for this "
+                                                          "house and a licensed street photo."),
+            }[result["prediction_mode"]]
         else:
             out["message"] = "Location-only estimate. The visible exterior was not analyzed."
         out.update({

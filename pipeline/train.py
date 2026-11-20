@@ -9,13 +9,15 @@ Three kinds of model are trained, each separately for its target:
 1. Area models (sale value and monthly rent). One row per ZIP. Input is the
    latitude and longitude of a point, output is the typical single-family
    home value (or rent index) around it. Labels are Zillow ZIP values.
-2. Seattle per-house sale model. One row per real sale. Input is latitude,
-   longitude and month, output is a sale price.
-3. Seattle photo model (only when matched photos exist). It predicts what
-   the location model missed, from a photo embedding.
-
-No model sees bedrooms, bathrooms, floor area or anything else the app
-cannot know when a user asks for an estimate.
+2. Seattle per-house sale models. One row per real sale. Two versions:
+   a. location only: latitude, longitude and month;
+   b. location plus the house record: the same, plus the county's facts about
+      that house (living area, grade, age, condition, rooms, lot, view,
+      waterfront; see core/house_features.py). The app knows these for any
+      Seattle parcel the user confirms, so nothing is typed in by the user.
+3. Seattle photo models (only when matched photos exist). They predict what
+   the sale model missed, from a photo embedding. Several photo encoders are
+   compared (core/embed.py).
 """
 import argparse
 import hashlib
@@ -38,7 +40,8 @@ from sklearn.neighbors import KNeighborsRegressor
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import FunctionTransformer, StandardScaler
 
-from core.embed import ENCODER_NAME
+from core import house_features
+from core.embed import DEFAULT_ENCODER, ENCODERS
 from core.features import FEATURE_VERSION, month_index_from_dates, to_xyz_km, xyz_only
 from core.paths import DEMO_MODEL_DIR, FIXTURES_DIR, PROCESSED_DIR, REAL_MODEL_DIR, REPORTS_DIR
 
@@ -255,6 +258,35 @@ def sale_candidates() -> Dict[str, Callable]:
     return candidates
 
 
+def house_candidates() -> Dict[str, Callable]:
+    """Candidate models for location, month and the house record. Boosted trees handle mixed features well."""
+    out: Dict[str, Callable] = {}
+    for lr, leaf in ((0.05, 20), (0.03, 30), (0.05, 50)):
+        out["gbm_lr%g_leaf%d" % (lr, leaf)] = lambda lr=lr, leaf=leaf: with_log_target(
+            HistGradientBoostingRegressor(max_iter=800, learning_rate=lr, max_leaf_nodes=31,
+                                          min_samples_leaf=leaf, random_state=SEED))
+    return out
+
+
+def with_house_features(sales: pd.DataFrame, features: pd.DataFrame) -> Tuple[pd.DataFrame, Dict]:
+    """Attach the house record to each sale, and drop sales the record does not describe.
+
+    The record shows the building as it is today. A house built or renovated
+    in or after the year it sold was a different building at the time of the
+    sale, so that sale is left out.
+    """
+    counts = {"sales": int(len(sales))}
+    df = sales.merge(features, left_on="property_id", right_index=True, how="inner")
+    df = df.dropna(subset=house_features.FEATURE_COLUMNS)
+    counts["with_a_complete_house_record"] = int(len(df))
+    year = pd.to_datetime(df["record_date"]).dt.year
+    changed = (df["year_built"] >= year) | (df["year_renovated"] >= year)
+    counts["built_or_renovated_in_or_after_the_sale_year_removed"] = int(changed.sum())
+    df = df[~changed].reset_index(drop=True)
+    counts["kept"] = int(len(df))
+    return df, counts
+
+
 def assign_time_splits(sales: pd.DataFrame) -> Tuple[pd.DataFrame, int]:
     """Split sales by date into train, val, cal, test (oldest to newest).
 
@@ -277,9 +309,20 @@ def assign_time_splits(sales: pd.DataFrame) -> Tuple[pd.DataFrame, int]:
     return df.drop(columns=["split_rank"]).reset_index(drop=True), removed
 
 
-def sale_matrix(df: pd.DataFrame) -> np.ndarray:
+def sale_matrix(df: pd.DataFrame, feature_cols: Tuple[str, ...] = ()) -> np.ndarray:
     t = month_index_from_dates(pd.to_datetime(df["record_date"]))
-    return np.column_stack([df["lat"].to_numpy(dtype=float), df["lon"].to_numpy(dtype=float), t])
+    columns = [df["lat"].to_numpy(dtype=float), df["lon"].to_numpy(dtype=float), t]
+    columns += [df[c].to_numpy(dtype=float) for c in feature_cols]
+    return np.column_stack(columns)
+
+
+def choose_on_validation(candidates: Dict[str, Callable], X: np.ndarray, y: np.ndarray,
+                         masks: Dict[str, np.ndarray]) -> Tuple[str, Dict]:
+    scores = {}
+    for name, make in candidates.items():
+        model = make().fit(X[masks["train"]], y[masks["train"]])
+        scores[name] = error_metrics(y[masks["val"]], model.predict(X[masks["val"]]))
+    return min(scores, key=lambda n: scores[n]["mae"]), scores
 
 
 def _zip_median_predict(fit: pd.DataFrame, target: pd.DataFrame) -> np.ndarray:
@@ -288,15 +331,22 @@ def _zip_median_predict(fit: pd.DataFrame, target: pd.DataFrame) -> np.ndarray:
     return target["zip"].map(medians).fillna(city_median).to_numpy(dtype=float)
 
 
-def train_sale_model(sales: pd.DataFrame, zhvi_history: Optional[pd.DataFrame]) -> Tuple[Optional[Dict], Dict]:
-    """Train the per-house sale model with a date-ordered split."""
-    report: Dict = {"n_rows": int(len(sales))}
+def train_sale_model(sales: pd.DataFrame, zhvi_history: Optional[pd.DataFrame],
+                     feature_cols: Tuple[str, ...] = ()) -> Tuple[Optional[Dict], Dict]:
+    """Train a per-house sale model with a date-ordered split.
+
+    With feature_cols empty the model sees location and month only. With the
+    house record columns it also sees the facts about the house.
+    """
+    with_house = bool(feature_cols)
+    main_key = "house_model" if with_house else "location_only"
+    report: Dict = {"n_rows": int(len(sales)), "inputs": ["latitude", "longitude", "sale month"] + list(feature_cols)}
     if len(sales) < MIN_SALE_ROWS:
         report["status"] = "insufficient_data"
         return None, report
 
     df, removed = assign_time_splits(sales)
-    X = sale_matrix(df)
+    X = sale_matrix(df, feature_cols)
     y = df["price_usd"].to_numpy(dtype=float)
     split = df["split"].to_numpy()
     masks = {name: split == name for name in SPLIT_NAMES}
@@ -312,12 +362,8 @@ def train_sale_model(sales: pd.DataFrame, zhvi_history: Optional[pd.DataFrame]) 
     report["houses_in_both_training_and_test"] = len(overlap)
 
     # Step 1: choose the model on the validation split.
-    candidates = sale_candidates()
-    val_scores = {}
-    for name, make in candidates.items():
-        model = make().fit(X[masks["train"]], y[masks["train"]])
-        val_scores[name] = error_metrics(y[masks["val"]], model.predict(X[masks["val"]]))
-    chosen = min(val_scores, key=lambda n: val_scores[n]["mae"])
+    candidates = house_candidates() if with_house else sale_candidates()
+    chosen, val_scores = choose_on_validation(candidates, X, y, masks)
     report["validation"] = val_scores
     report["chosen_on_validation"] = chosen
 
@@ -331,9 +377,15 @@ def train_sale_model(sales: pd.DataFrame, zhvi_history: Optional[pd.DataFrame]) 
     test = {
         "baseline_city_median": error_metrics(y_test, np.full(len(y_test), fit_df["price_usd"].median())),
         "baseline_zip_median": error_metrics(y_test, _zip_median_predict(fit_df, test_df)),
-        "location_only": error_metrics(y_test, test_pred),
+        main_key: error_metrics(y_test, test_pred),
     }
-    for name in ("knn_k%d" % SALE_K_VALUES[2], "gbm"):
+    if with_house:
+        # The location-only model on exactly the same rows, chosen the same way, for a fair comparison.
+        loc_name, _ = choose_on_validation(sale_candidates(), X[:, :3], y, masks)
+        loc = sale_candidates()[loc_name]().fit(X[fit_mask][:, :3], y[fit_mask])
+        test["location_only_same_rows"] = error_metrics(y_test, loc.predict(X[masks["test"]][:, :3]))
+        report["location_only_model_on_same_rows"] = loc_name
+    for name in (() if with_house else ("knn_k%d" % SALE_K_VALUES[2], "gbm")):
         if name != chosen:
             other = candidates[name]().fit(X[fit_mask], y[fit_mask])
             test["location_" + name + "_not_chosen"] = error_metrics(y_test, other.predict(X[masks["test"]]))
@@ -343,9 +395,10 @@ def train_sale_model(sales: pd.DataFrame, zhvi_history: Optional[pd.DataFrame]) 
         zillow = np.array([lookup.get(k, np.nan) for k in keys], dtype=float)
         have = ~np.isnan(zillow)
         test["baseline_zillow_zip_value_same_month"] = error_metrics(y_test[have], zillow[have])
-        test["location_only_on_those_rows"] = error_metrics(y_test[have], test_pred[have])
+        test[main_key + "_on_those_rows"] = error_metrics(y_test[have], test_pred[have])
     report["test"] = test
     report["test_median_sale_price"] = round(float(np.median(y_test)), 2)
+    report["test_median_percent_error"] = round(float(np.median(np.abs(test_pred - y_test) / y_test)), 4)
 
     # Step 3: prediction range from the calibration split, coverage measured on test.
     interval = None
@@ -373,7 +426,8 @@ def train_sale_model(sales: pd.DataFrame, zhvi_history: Optional[pd.DataFrame]) 
         "model": served,
         "time_index": float(X[:, 2].max()),
         "interval": interval,
-        "_eval": {"df": df, "X": X, "y": y, "masks": masks, "chosen": chosen},
+        "feature_cols": list(feature_cols),
+        "_eval": {"df": df, "X": X, "y": y, "masks": masks, "chosen": chosen, "make": candidates[chosen]},
     }
     return bundle, report
 
@@ -416,20 +470,21 @@ def match_images(df: pd.DataFrame, matches: pd.DataFrame, refs: np.ndarray) -> n
 
 
 def train_image_model(sale_bundle: Dict, matches: pd.DataFrame, refs: np.ndarray,
-                      embeddings: np.ndarray) -> Tuple[Optional[Dict], Dict]:
+                      embeddings: np.ndarray, encoder: str = DEFAULT_ENCODER) -> Tuple[Optional[Dict], Dict]:
     """Train the photo model on the houses that have a matched photo.
 
     The photo model predicts the log of (true price / location-only price),
     which is the part of the price that location could not explain.
     """
     ev = sale_bundle["_eval"]
-    df, X, y, masks, chosen = ev["df"], ev["X"], ev["y"], ev["masks"], ev["chosen"]
-    make_location = sale_candidates()[chosen]
+    df, X, y, masks = ev["df"], ev["X"], ev["y"], ev["masks"]
+    make_location = ev["make"]
     emb_index = match_images(df, matches, refs)
     has_image = emb_index >= 0
     fit_mask = masks["train"] | masks["val"]
     report: Dict = {
-        "encoder": ENCODER_NAME,
+        "encoder": ENCODERS[encoder]["name"],
+        "encoder_id": encoder,
         "rows_with_photo": {name: int((masks[name] & has_image).sum()) for name in SPLIT_NAMES},
         "rows_total": {name: int(masks[name].sum()) for name in SPLIT_NAMES},
     }
@@ -514,7 +569,35 @@ def train_image_model(sale_bundle: Dict, matches: pd.DataFrame, refs: np.ndarray
     served = image_candidates()[chosen_image]().fit(
         embeddings[emb_index[has_image]], np.log(y[has_image]) - np.log(oof_all[has_image]))
     report["status"] = "trained"
-    return {"residual_model": served, "interval": interval, "serve": bool(serve)}, report
+    return {"residual_model": served, "interval": interval, "serve": bool(serve), "encoder": encoder}, report
+
+
+def train_photo_models(sale_bundle: Dict, matches: pd.DataFrame,
+                       encoders: Dict[str, Tuple[np.ndarray, np.ndarray]]) -> Tuple[Optional[Dict], Dict]:
+    """Train one photo model per encoder and keep the one with the lowest cross-validated error.
+
+    The encoder is chosen on the training rows only (grouped cross-validation),
+    never on the calibration or test rows.
+    """
+    results = {}
+    for name, (refs, emb) in encoders.items():
+        print("  photo encoder: %s" % name)
+        results[name] = train_image_model(sale_bundle, matches, refs, emb, name)
+    trained = {n: r for n, r in results.items() if r[1].get("status") == "trained"}
+    if not trained:
+        first = next(iter(results.values()), (None, {"status": "not_trained", "reason": "no photo encoders"}))
+        return None, first[1]
+    best = min(trained, key=lambda n: trained[n][1]["cross_validation_mae_on_fit_rows"]["location_plus_photo"])
+    bundle, report = trained[best]
+    report = dict(report)
+    report["chosen_encoder"] = best
+    report["encoders_compared"] = {
+        n: {"encoder": r["encoder"],
+            "cross_validation_mae_on_fit_rows": r["cross_validation_mae_on_fit_rows"],
+            "test_rows_with_photo": r["test_rows_with_photo"],
+            "test_comparison": r["test_comparison"]}
+        for n, (_, r) in trained.items()}
+    return bundle, report
 
 
 # ------------------------------------------------------ photo date experiment
@@ -545,7 +628,7 @@ def date_gap_experiment(sale_bundle: Dict, matches: pd.DataFrame, refs: np.ndarr
     This is an experiment only. It is not served by the app.
     """
     ev = sale_bundle["_eval"]
-    df, X, y, chosen = ev["df"], ev["X"], ev["y"], ev["chosen"]
+    df, X, y = ev["df"], ev["X"], ev["y"]
     report: Dict = {
         "description": ("5-fold cross-validation over every Seattle sale with a photo, grouped by house, so each "
                         "house is scored by models that never saw it. Not a date-ordered split: the newest sales "
@@ -572,7 +655,7 @@ def date_gap_experiment(sale_bundle: Dict, matches: pd.DataFrame, refs: np.ndarr
                                                                  errors="coerce").to_numpy() >
                                                   pd.to_datetime(df["record_date"].iloc[rows]).to_numpy())),
     }
-    base_all = out_of_fold_location(sale_candidates()[chosen], X, y, groups)
+    base_all = out_of_fold_location(ev["make"], X, y, groups)
     base, y_r, E, grp = base_all[rows], y[rows], embeddings[emb_index[rows]], groups[rows]
     resid = np.log(y_r) - np.log(base)
     make = image_candidates()[recipe]
@@ -718,6 +801,7 @@ def load_inputs(fixtures: bool) -> Dict:
             "history": base / "does_not_exist.csv",
             "matches": base / "synthetic_image_matches.csv",
             "embeddings": base / "synthetic_image_embeddings.npz",
+            "house": base / "synthetic_house_features.csv",
         }
     else:
         base = PROCESSED_DIR
@@ -728,6 +812,7 @@ def load_inputs(fixtures: bool) -> Dict:
             "history": base / "zhvi_history.csv",
             "matches": base / "image_matches.csv",
             "embeddings": base / "image_embeddings.npz",
+            "house": base / "seattle_house_features.csv",
         }
     paths["area_points"] = base / "area_image_points.csv"
     out: Dict = {"paths": paths}
@@ -743,6 +828,16 @@ def load_inputs(fixtures: bool) -> Dict:
         out["matches"] = pd.read_csv(paths["matches"], dtype={"property_id": str, "image_ref": str})
         npz = np.load(paths["embeddings"], allow_pickle=False)
         out["embeddings"] = (npz["image_ref"], npz["embedding"].astype(np.float64))
+    out["house"] = house_features.load_table(paths["house"])
+    # Every photo encoder with saved embeddings. resnet18 is the file named image_embeddings.npz.
+    out["encoders"] = {}
+    if out["embeddings"] is not None:
+        out["encoders"][DEFAULT_ENCODER] = out["embeddings"]
+        for name in ENCODERS:
+            path = base / ("image_embeddings_%s.npz" % name)
+            if name != DEFAULT_ENCODER and path.exists():
+                npz = np.load(path, allow_pickle=False)
+                out["encoders"][name] = (npz["image_ref"], npz["embedding"].astype(np.float64))
     # How many searched houses and spots had a usable photo (written by pipeline.fetch_images).
     out["coverage"] = None
     coverage_path = base / "image_coverage.json"
@@ -777,16 +872,34 @@ def train_all(fixtures: bool, out_dir: Optional[Path] = None) -> Dict:
         print("Training Seattle per-house sale model")
         sale_bundle, metrics["seattle_sale"] = train_sale_model(inputs["sales"], inputs["history"])
 
+    house_bundle = None
+    metrics["seattle_house"] = {"status": "no_data", "reason": "no house record table"}
+    if inputs["sales"] is not None and inputs["house"] is not None:
+        print("Training Seattle model with the house record")
+        house_sales, counts = with_house_features(inputs["sales"], inputs["house"])
+        house_bundle, metrics["seattle_house"] = train_sale_model(house_sales, inputs["history"],
+                                                                 tuple(house_features.FEATURE_COLUMNS))
+        metrics["seattle_house"]["row_counts"] = counts
+
+    # The served photo model sits on top of the best sale model the app can use for a house.
+    served_base = house_bundle if house_bundle is not None else sale_bundle
     image_bundle = None
     metrics["seattle_photo"] = {"status": "not_trained", "reason": "no matched photos have been downloaded"}
-    if sale_bundle is not None and inputs["embeddings"] is not None and inputs["matches"] is not None:
-        print("Training Seattle photo model")
-        refs, emb = inputs["embeddings"]
-        image_bundle, metrics["seattle_photo"] = train_image_model(sale_bundle, inputs["matches"], refs, emb)
-        if metrics["seattle_photo"].get("status") == "trained":
+    have_photos = inputs["encoders"] and inputs["matches"] is not None
+    if served_base is not None and have_photos:
+        print("Training Seattle photo models on top of the %s model" % ("house record" if house_bundle else "location"))
+        image_bundle, metrics["seattle_photo"] = train_photo_models(served_base, inputs["matches"], inputs["encoders"])
+        metrics["seattle_photo"]["base_model"] = "location_plus_house_record" if house_bundle else "location_only"
+        if image_bundle is not None:
+            image_bundle["base"] = metrics["seattle_photo"]["base_model"]
             print("Running the photo date experiment")
-            metrics["photo_date"] = date_gap_experiment(sale_bundle, inputs["matches"], refs, emb,
+            refs, emb = inputs["encoders"][image_bundle["encoder"]]
+            metrics["photo_date"] = date_gap_experiment(served_base, inputs["matches"], refs, emb,
                                                         metrics["seattle_photo"]["chosen_photo_model"])
+    if house_bundle is not None and sale_bundle is not None and have_photos:
+        # The professor's question: does a photo add anything beyond location alone?
+        print("Training Seattle photo models on top of the location-only model")
+        _, metrics["seattle_photo_location"] = train_photo_models(sale_bundle, inputs["matches"], inputs["encoders"])
 
     if inputs["area_points"] is not None and area_sale is not None and area_rent is not None:
         print("Running the area photo experiment")
@@ -797,7 +910,7 @@ def train_all(fixtures: bool, out_dir: Optional[Path] = None) -> Dict:
     trained_at = datetime.now(timezone.utc)
     kind = "demo" if fixtures else "real"
     version = "homelens-%s-%s-%s" % (kind, trained_at.strftime("%Y%m%d"),
-                                     file_hash([inputs["paths"][k] for k in ("zip", "sales", "embeddings")]))
+                                     file_hash([inputs["paths"][k] for k in ("zip", "sales", "embeddings", "house")]))
     sales = inputs["sales"]
     manifest = {
         "model_version": version,
@@ -818,8 +931,10 @@ def train_all(fixtures: bool, out_dir: Optional[Path] = None) -> Dict:
     }
     if sale_bundle is not None:
         sale_bundle = {k: v for k, v in sale_bundle.items() if k != "_eval"}
+    if house_bundle is not None:
+        house_bundle = {k: v for k, v in house_bundle.items() if k != "_eval"}
     bundle = {"area_sale": area_sale, "area_rent": area_rent, "seattle_sale": sale_bundle,
-              "seattle_photo": image_bundle, "manifest": manifest}
+              "seattle_house": house_bundle, "seattle_photo": image_bundle, "manifest": manifest}
     joblib.dump(bundle, out_dir / "bundle.joblib")
     with open(out_dir / "manifest.json", "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2)
