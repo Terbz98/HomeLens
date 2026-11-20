@@ -100,8 +100,25 @@ $285,597, location plus photo $277,606. Resampling whole ZIPs gives a range from
 $18,427 lower, so again no measurable difference. Monthly rent: $319 against $323, no measurable
 difference.
 
+**Photo date.** A photo and a sale can be years apart, so the photo may show the house before or
+after a renovation. The capture date of every matched photo is recorded. Across 1,705 Seattle sales
+with a dated photo, the median time between sale and photo is 5.4 years, only 14.3% of photos were
+taken within 3 years of the sale, and 111 photos were taken after the sale. Too few of the newest
+(test) sales have a recent photo for a date-ordered test, so this was checked with 5-fold
+cross-validation grouped by house (see "Photo date experiment" in evaluation.md):
+
+| Photos taken | Sales | Location only | Location plus photo | Result |
+|---|---:|---:|---:|---|
+| Within 3 years of the sale | 244 | $334,833 | $337,971 | No measurable difference |
+| 3 to 5 years | 466 | $377,318 | $377,300 | No measurable difference |
+| More than 5 years | 995 | $351,285 | $350,223 | No measurable difference |
+| Within 3 years, photo model trained on those photos only | 244 | $334,833 | $344,473 | No measurable difference |
+
+So photos taken close to the sale did not help either. The date gap does not explain the result on
+its own, although with 244 recent-photo sales a small gain would be hard to detect.
+
 **Likely reasons (not tested, the author's reading).** Most Mapillary photos are dashcam frames that
-look along the road, not at the house. Many are several years old. The encoder is a general ImageNet
+look along the road, not at the house. Many are several years away from the sale date (checked above, it did not change the result). The encoder is a general ImageNet
 network that was never tuned on houses. Only 1,208 training sales have a photo. And much of a house's
 price comes from its interior size and condition, which no street photo shows.
 

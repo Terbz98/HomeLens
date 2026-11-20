@@ -46,6 +46,24 @@ def test_compare_errors_says_when_a_gain_is_real_and_when_it_is_noise():
     assert grouped["resampled"] == "whole ZIPs" and grouped["mae_lowered_by_usd"] == 50.0
 
 
+def test_photo_gap_ignores_order_and_marks_missing_dates():
+    gap = train.photo_gap_years(["2024-01-01", "2020-01-01", "2024-01-01"], ["2021-01-01", "2022-01-01", ""])
+    assert gap[0] == pytest.approx(3.0, abs=0.01)      # photo 3 years before the sale
+    assert gap[1] == pytest.approx(2.0, abs=0.01)      # photo 2 years after the sale
+    assert np.isnan(gap[2])                            # no photo date
+
+
+def test_photo_date_experiment_reports_every_bucket(demo_run):
+    _, manifest = demo_run
+    report = manifest["metrics"]["photo_date"]
+    assert report["status"] in ("trained", "insufficient_data")
+    if report["status"] == "trained":
+        assert set(report["trained_on_all_photos"]) == {name for name, _, _ in train.DATE_GAP_BUCKETS}
+        total = sum(b["location_only"]["n"] for b in report["trained_on_all_photos"].values())
+        assert total == report["n_sales_with_dated_photo"]      # every dated photo lands in one bucket
+        assert "not served" in report["description"]
+
+
 def test_xyz_distance_matches_ground_distance():
     a = (47.6561, -122.3560)
     b = (47.6565, -122.3568)

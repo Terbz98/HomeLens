@@ -222,6 +222,8 @@ It does not ask for `tabs`, `history`, `activeTab`, `storage` or access to all s
 - Property type is confirmed by you. HomeLens does not detect it.
 - The photo model did not beat the location-only model, so every real estimate is location-only.
   Street photo coverage is also uneven: 56.8% of sampled Seattle houses had a usable photo.
+  Photos are often years away from the sale date (median 5.4 years). Photos within 3 years of the sale
+  did not help either (see the photo date experiment in [docs/evaluation.md](docs/evaluation.md)).
 - Google Street View images are never read, stored or sent to a model. That part of the original
   idea is blocked by Google's terms. See [docs/licensing.md](docs/licensing.md).
 - The backend is meant to run on your own computer. It has no accounts and no HTTPS.

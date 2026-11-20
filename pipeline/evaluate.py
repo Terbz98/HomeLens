@@ -177,6 +177,37 @@ def coverage_section(coverage: Dict) -> List[str]:
     return lines + [""]
 
 
+def photo_date_section(report: Dict) -> List[str]:
+    lines = ["## Photo date experiment (does a photo taken near the sale date help?)", ""]
+    if report.get("status") != "trained":
+        return lines + ["Not run: %s. %s" % (report.get("status"), report.get("reason", "")), ""]
+    gap = report["gap_years"]
+    lines += [
+        report["description"], "",
+        "Sales with a dated photo: %d. Median time between sale and photo: %.1f years. Photos within 3 years of "
+        "the sale: %.1f%%. Photos taken after the sale: %d." % (
+            report["n_sales_with_dated_photo"], gap["median"], 100 * gap["share_within_3_years"],
+            gap["photos_taken_after_the_sale"]),
+        "Photo model recipe: `%s` (the one chosen for the Seattle photo model)." % report["photo_model"], "",
+        "A. Photo model trained on all photos, errors by time between sale and photo:", "",
+    ]
+    for name, block in report["trained_on_all_photos"].items():
+        rows = {k: v for k, v in block.items() if k != "comparison"}
+        lines += ["%s:" % name.capitalize(), ""] + _table(rows) + [""]
+        if block["comparison"]:
+            lines += ["Did the photo help? %s" % _comparison(block["comparison"]), ""]
+        else:
+            lines += ["Too few rows to test the difference.", ""]
+    close = report["trained_on_close_photos_only"]
+    lines += ["B. Photo model trained and scored only on photos taken within 3 years of the sale:", ""]
+    if close:
+        lines += _table({k: v for k, v in close.items() if k != "comparison"}) + [
+            "", "Did the photo help? %s" % _comparison(close["comparison"]), ""]
+    else:
+        lines += ["Too few rows.", ""]
+    return lines
+
+
 def area_photo_section(report: Dict) -> List[str]:
     lines = ["## Area photo experiment (San Francisco and Portland)", ""]
     status = report.get("status")
@@ -214,6 +245,8 @@ def render(manifest: Dict) -> str:
     if manifest.get("photo_coverage"):
         lines += coverage_section(manifest["photo_coverage"])
     lines += photo_section(metrics["seattle_photo"])
+    if "photo_date" in metrics:
+        lines += photo_date_section(metrics["photo_date"])
     if "area_photo" in metrics:
         lines += area_photo_section(metrics["area_photo"])
     lines += ["## Single-family rent ratio", "",

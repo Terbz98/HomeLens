@@ -517,6 +517,99 @@ def train_image_model(sale_bundle: Dict, matches: pd.DataFrame, refs: np.ndarray
     return {"residual_model": served, "interval": interval, "serve": bool(serve)}, report
 
 
+# ------------------------------------------------------ photo date experiment
+
+DATE_GAP_BUCKETS = (("within 3 years", 0.0, 3.0), ("3 to 5 years", 3.0, 5.0), ("more than 5 years", 5.0, 1e9))
+CLOSE_GAP_YEARS = 3.0
+MIN_DATE_BUCKET_ROWS = 100
+
+
+def photo_gap_years(sale_dates, photo_dates) -> np.ndarray:
+    """Years between the sale and the photo, ignoring which came first. NaN when the photo date is unknown."""
+    sale = pd.to_datetime(pd.Series(sale_dates), errors="coerce")
+    photo = pd.to_datetime(pd.Series(photo_dates), errors="coerce")
+    return ((sale - photo).dt.days.abs() / 365.25).to_numpy(dtype=float)
+
+
+def date_gap_experiment(sale_bundle: Dict, matches: pd.DataFrame, refs: np.ndarray, embeddings: np.ndarray,
+                        recipe: str) -> Dict:
+    """Does the photo help more when it was taken close to the sale date?
+
+    The time split leaves too few test sales with a recent photo (most test
+    photos are years old), so this experiment uses 5-fold cross-validation
+    over every sale that has a photo, grouped by house. Location-only numbers
+    come from a location model that never saw the house. Two versions of the
+    photo model are scored:
+      A. trained on all photos, errors broken down by the photo's date gap;
+      B. trained and scored only on photos taken within CLOSE_GAP_YEARS of the sale.
+    This is an experiment only. It is not served by the app.
+    """
+    ev = sale_bundle["_eval"]
+    df, X, y, chosen = ev["df"], ev["X"], ev["y"], ev["chosen"]
+    report: Dict = {
+        "description": ("5-fold cross-validation over every Seattle sale with a photo, grouped by house, so each "
+                        "house is scored by models that never saw it. Not a date-ordered split: the newest sales "
+                        "have too few recent photos for that. This experiment is not served by the app."),
+        "photo_model": recipe,
+    }
+    groups = df["property_id"].to_numpy()
+    emb_index = match_images(df, matches, refs)
+    m = matches.dropna(subset=["image_ref"]).astype({"image_ref": str})
+    date_of = dict(zip(m["image_ref"], m.get("image_captured_at", pd.Series([""] * len(m)))))
+    ref_of_row = np.array([str(refs[i]) if i >= 0 else "" for i in emb_index])
+    gap = photo_gap_years(df["record_date"], [date_of.get(r, "") for r in ref_of_row])
+    rows = np.where((emb_index >= 0) & np.isfinite(gap))[0]
+    report["n_sales_with_dated_photo"] = int(len(rows))
+    if len(rows) < MIN_DATE_BUCKET_ROWS:
+        report["status"] = "insufficient_data"
+        report["reason"] = "too few sales with a dated photo"
+        return report
+    g = gap[rows]
+    report["gap_years"] = {
+        "median": round(float(np.median(g)), 2),
+        "share_within_%g_years" % CLOSE_GAP_YEARS: round(float(np.mean(g <= CLOSE_GAP_YEARS)), 4),
+        "photos_taken_after_the_sale": int(np.sum(pd.to_datetime(pd.Series([date_of.get(r, "") for r in ref_of_row[rows]]),
+                                                                 errors="coerce").to_numpy() >
+                                                  pd.to_datetime(df["record_date"].iloc[rows]).to_numpy())),
+    }
+    base_all = out_of_fold_location(sale_candidates()[chosen], X, y, groups)
+    base, y_r, E, grp = base_all[rows], y[rows], embeddings[emb_index[rows]], groups[rows]
+    resid = np.log(y_r) - np.log(base)
+    make = image_candidates()[recipe]
+
+    def cross_validated(mask: np.ndarray) -> np.ndarray:
+        pred = np.full(len(rows), np.nan)
+        idx = np.where(mask)[0]
+        for tr, te in GroupKFold(n_splits=5).split(idx, groups=grp[idx]):
+            fit = make().fit(E[idx[tr]], resid[idx[tr]])
+            pred[idx[te]] = base[idx[te]] * np.exp(fit.predict(E[idx[te]]))
+        return pred
+
+    photo_all = cross_validated(np.ones(len(rows), dtype=bool))
+    report["trained_on_all_photos"] = {}
+    for name, low, high in DATE_GAP_BUCKETS:
+        mask = (g >= low) & (g < high) if low > 0 else (g <= high)
+        block = {"location_only": error_metrics(y_r[mask], base[mask]) if mask.sum() else {"n": 0, "mae": None, "rmse": None},
+                 "location_plus_photo": error_metrics(y_r[mask], photo_all[mask]) if mask.sum() else {"n": 0, "mae": None, "rmse": None}}
+        if mask.sum() >= MIN_DATE_BUCKET_ROWS:
+            block["comparison"] = compare_errors(y_r[mask], base[mask], photo_all[mask])
+        else:
+            block["comparison"] = None
+        report["trained_on_all_photos"][name] = block
+    close = g <= CLOSE_GAP_YEARS
+    if close.sum() >= MIN_DATE_BUCKET_ROWS:
+        photo_close = cross_validated(close)
+        report["trained_on_close_photos_only"] = {
+            "location_only": error_metrics(y_r[close], base[close]),
+            "location_plus_photo": error_metrics(y_r[close], photo_close[close]),
+            "comparison": compare_errors(y_r[close], base[close], photo_close[close]),
+        }
+    else:
+        report["trained_on_close_photos_only"] = None
+    report["status"] = "trained"
+    return report
+
+
 # ------------------------------------------------------ area photo experiment
 
 MIN_AREA_PHOTO_POINTS = 150
@@ -690,6 +783,10 @@ def train_all(fixtures: bool, out_dir: Optional[Path] = None) -> Dict:
         print("Training Seattle photo model")
         refs, emb = inputs["embeddings"]
         image_bundle, metrics["seattle_photo"] = train_image_model(sale_bundle, inputs["matches"], refs, emb)
+        if metrics["seattle_photo"].get("status") == "trained":
+            print("Running the photo date experiment")
+            metrics["photo_date"] = date_gap_experiment(sale_bundle, inputs["matches"], refs, emb,
+                                                        metrics["seattle_photo"]["chosen_photo_model"])
 
     if inputs["area_points"] is not None and area_sale is not None and area_rent is not None:
         print("Running the area photo experiment")
