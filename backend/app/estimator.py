@@ -44,9 +44,11 @@ class Estimator:
     """
 
     def __init__(self, bundle: Optional[Dict], provider: ImageryProvider, package: Dict, demo: bool,
-                 embed_fn: Callable[..., np.ndarray] = _default_embed, house_table=None, photo_mode: str = "on"):
+                 embed_fn: Callable[..., np.ndarray] = _default_embed, house_table=None, photo_mode: str = "on",
+                 san_francisco: Optional[Dict] = None):
         self.bundle = bundle
         self.house_table = house_table
+        self.san_francisco = san_francisco if bundle and not demo else None
         self.photo_mode = photo_mode
         self.provider = provider
         self.package = package
@@ -58,11 +60,14 @@ class Estimator:
 
     @classmethod
     def from_dir(cls, model_dir: Path, provider: ImageryProvider, package: Dict, demo: bool,
-                 house_features_path: Optional[Path] = None, photo_mode: str = "on") -> "Estimator":
+                 house_features_path: Optional[Path] = None, photo_mode: str = "on",
+                 san_francisco_preview: bool = False) -> "Estimator":
         path = Path(model_dir) / "bundle.joblib"
         bundle = joblib.load(path) if path.exists() else None
         table = house_features.load_table(house_features_path) if house_features_path else None
-        return cls(bundle, provider, package, demo, house_table=table, photo_mode=photo_mode)
+        candidate = Path(model_dir) / "san_francisco.joblib"
+        sf = joblib.load(candidate) if bundle and san_francisco_preview and not demo and candidate.is_file() else None
+        return cls(bundle, provider, package, demo, house_table=table, photo_mode=photo_mode, san_francisco=sf)
 
     # ------------------------------------------------------------ status helpers
 
@@ -79,7 +84,14 @@ class Estimator:
         return self.manifest["model_version"] if self.bundle else None
 
     def has_per_house_model(self, city: Dict) -> bool:
+        if city["id"] == "san_francisco":
+            return bool(self.san_francisco and self.san_francisco.get("house"))
         return bool(self.bundle and city.get("per_house_sales") and self.bundle.get("seattle_sale"))
+
+    def _photo_model(self, city: Dict) -> Optional[Dict]:
+        if city["id"] == "san_francisco":
+            return self.san_francisco.get("photo") if self.san_francisco else None
+        return self.bundle.get("seattle_photo") if self.bundle else None
 
     def _photo_allowed(self, photo: Optional[Dict]) -> bool:
         if not photo or self.photo_mode == "off":
@@ -87,18 +99,25 @@ class Estimator:
         return self.photo_mode == "on" or bool(photo.get("serve"))
 
     def photo_model_served(self, city: Dict) -> bool:
-        photo = self.bundle.get("seattle_photo") if self.bundle else None
-        return bool(self.has_per_house_model(city) and self._photo_allowed(photo))
+        return bool(self.has_per_house_model(city) and self._photo_allowed(self._photo_model(city)))
 
-    def house_record(self, property_id: Optional[str]) -> Optional[Dict]:
+    def house_record(self, property_id: Optional[str], city: Optional[Dict] = None) -> Optional[Dict]:
         """The county facts for this parcel, when a house-record model exists and the parcel is known."""
+        if city and city["id"] == "san_francisco":
+            if not self.has_per_house_model(city):
+                return None
+            return house_features.lookup(self.san_francisco["features"], property_id,
+                                         self.san_francisco["house"]["feature_cols"])
         if not (self.bundle and self.bundle.get("seattle_house")):
             return None
         return house_features.lookup(self.house_table, property_id)
 
-    def _photo_effect_text(self) -> str:
+    def _photo_effect_text(self, city: Dict) -> str:
         """One sentence on what photos did in testing, from the training report."""
-        report = (self.manifest or {}).get("metrics", {}).get("seattle_photo", {})
+        if city["id"] == "san_francisco":
+            report = self.san_francisco["photo_report"]
+        else:
+            report = (self.manifest or {}).get("metrics", {}).get("seattle_photo", {})
         c = report.get("test_comparison")
         if not c:
             return ""
@@ -116,7 +135,7 @@ class Estimator:
         """
         if not use_image:
             return {"status": "not_requested", "message": "You asked for a location-only estimate."}, None
-        photo = self.bundle.get("seattle_photo") if self.has_per_house_model(city) else None
+        photo = self._photo_model(city) if self.has_per_house_model(city) else None
         if photo is None:
             return {"status": "no_photo_model",
                     "message": "No photo model has been trained for this city, so the visible exterior was not analyzed."}, None
@@ -131,11 +150,12 @@ class Estimator:
         if not self.provider.configured:
             return {"status": "not_configured",
                     "message": "No licensed imagery source is set up on the server, so the visible exterior was not analyzed."}, None
+        fallback = ("The house record was used." if city["id"] == "san_francisco" else "Location only was used.")
         try:
             image = self.provider.find_best(lat, lon)
         except ImageryError as exc:
             log.warning("imagery search failed: %s", exc)
-            return {"status": "error", "message": "The imagery source could not be reached. Location only was used."}, None
+            return {"status": "error", "message": "The imagery source could not be reached. " + fallback}, None
         if image is None:
             return {"status": "unavailable",
                     "message": "No licensed street photo was found close enough to this house."}, None
@@ -144,11 +164,11 @@ class Estimator:
             factor = float(math.exp(float(photo["residual_model"].predict(np.asarray(embedding).reshape(1, -1))[0])))
         except Exception as exc:  # any failure here falls back to location only
             log.warning("photo step failed: %s", type(exc).__name__)
-            return {"status": "error", "message": "The photo could not be analyzed. Location only was used."}, None
+            return {"status": "error", "message": "The photo could not be analyzed. " + fallback}, None
         if not (math.isfinite(factor) and 0.2 <= factor <= 5.0):
-            return {"status": "error", "message": "The photo model gave an unusable result. Location only was used."}, None
+            return {"status": "error", "message": "The photo model gave an unusable result. " + fallback}, None
         return self._image_info(image, "used", "This licensed street photo was analyzed for the estimate."
-                                + self._photo_effect_text()), factor
+                                + self._photo_effect_text(city)), factor
 
     @staticmethod
     def _image_info(image: ExteriorImage, status: str, message: str) -> Dict:
@@ -204,18 +224,23 @@ class Estimator:
         ]
 
         # ---- buy price
+        is_sf = city["id"] == "san_francisco"
+        has_house_model = self.has_per_house_model(city)
+        record = self.house_record(property_id, city) if has_house_model else None
         mode = "location_only"
         sale_period = "Zillow home values for %s" % period["area_sale_month"]
-        if self.has_per_house_model(city):
-            record = self.house_record(property_id)
+        if has_house_model and (record is not None or not is_sf):
             if record is not None:
-                sale = self.bundle["seattle_house"]
+                sale = self.san_francisco["house"] if is_sf else self.bundle["seattle_house"]
                 row = [lat, lon, sale["time_index"]] + [record[c] for c in sale["feature_cols"]]
                 base_name = "location_plus_house_record"
                 mode = "location_plus_house_record"
-                limitations.append("Facts about the house (living area, rooms, grade, condition) come from the "
-                                   "King County record for this parcel, not from an inspection. The record can be "
-                                   "out of date.")
+                if is_sf:
+                    limitations.append("The assessor's house details may be out of date.")
+                else:
+                    limitations.append("Facts about the house (living area, rooms, grade, condition) come from the "
+                                       "King County record for this parcel, not from an inspection. The record can be "
+                                       "out of date.")
             else:
                 sale = self.bundle["seattle_sale"]
                 row = [lat, lon, sale["time_index"]]
@@ -228,12 +253,13 @@ class Estimator:
             if factor is not None:
                 base *= factor
                 mode = "location_plus_house_record_plus_image" if record is not None else "location_plus_image"
-                spec = self.bundle["seattle_photo"]["interval"]
+                spec = self._photo_model(city)["interval"]
             buy = _round_to(base, 1000) if is_valid_price(base, *SALE_PRICE_LIMITS) else None
             buy_basis = "per_house_model"
             inputs = ["its location"]
             if record is not None:
-                inputs.append("its county record (%s)" % house_features.describe(record))
+                facts = house_features.describe_san_francisco(record) if is_sf else house_features.describe(record)
+                inputs.append("its county record (%s)" % facts)
             if factor is not None:
                 inputs.append("a licensed street photo")
             buy_text = ("Predicted for this house from real %s sale records. Inputs: %s."
@@ -241,8 +267,15 @@ class Estimator:
             buy_interval = self._interval(buy, spec) if buy else None
             buy_note = ("About %.0f%% of test houses sold inside a range this wide." % (100 * spec["measured_coverage_on_test"])
                         if buy_interval else NO_RANGE_FEW_ROWS)
-            sale_period = "%s sales from %s to %s" % (city["name"], period["seattle_sales_from"], period["seattle_sales_to"])
-            attributions.append("Sale records: King County Department of Assessments.")
+            if is_sf:
+                sale_period = "%s training sales from %s to %s" % (
+                    city["name"], self.san_francisco["sales_from"], self.san_francisco["sales_to"])
+                attributions.extend(("House record: San Francisco Assessor-Recorder via DataSF.",
+                                     "Sale records: %s." % self.san_francisco["price_source"]))
+            else:
+                sale_period = "%s sales from %s to %s" % (
+                    city["name"], period["seattle_sales_from"], period["seattle_sales_to"])
+                attributions.append("Sale records: King County Department of Assessments.")
         else:
             area_sale = self.bundle.get("area_sale")
             base = float(area_sale.predict(np.array([[lat, lon]]))[0]) if area_sale is not None else float("nan")
@@ -252,9 +285,13 @@ class Estimator:
                         "It is not specific to this house.")
             buy_interval = None
             buy_note = NO_RANGE_AREA
+            if has_house_model:
+                buy_note = "A house-specific range requires a complete assessor record."
             if use_image:
                 image_info = {"status": "no_photo_model",
-                              "message": "No photo model is available for this city, so the visible exterior was not analyzed."}
+                              "message": ("A complete house record is required to use a photo for this estimate."
+                                          if has_house_model else "No photo model is available for this city, "
+                                          "so the visible exterior was not analyzed.")}
             else:
                 image_info = {"status": "not_requested", "message": "You asked for a location-only estimate."}
             limitations.append("For this city the buy price is an area-level figure, not a value for this specific house. "

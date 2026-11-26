@@ -132,6 +132,29 @@ uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
 Check it: open http://127.0.0.1:8000/health. The typed API description is at
 http://127.0.0.1:8000/docs.
 
+### San Francisco purchase model preview
+
+After building the standard real-data models, run the San Francisco pipeline in the same
+virtual environment.
+
+```bash
+python -m pip install "shapely>=2,<3"
+python -m pipeline.san_francisco --download
+python -m pipeline.train_san_francisco
+```
+
+DataSF supplies the address, parcel, footprint, and house details. The purchase labels come
+from the October 2026 RealEstateDataset county file. The results are in
+`reports/san_francisco_data.json` and `reports/san_francisco_evaluation.json`. The preview
+uses the evaluated model with its test sales kept out of training.
+
+To review the candidate locally, set `HOMELENS_SAN_FRANCISCO_PREVIEW=1` for the backend process.
+An eligible confirmed address with a complete assessor record uses the house model. An
+unmatched address or incomplete record uses the area estimate. The default is the area estimate.
+
+If you have a Mapillary token, use `python -m pipeline.fetch_images --city san_francisco --houses 1123`
+and `python -m pipeline.embed_images --city san_francisco`, then rerun San Francisco training.
+
 ### Demo mode (no downloads)
 
 Demo mode serves models trained on the small synthetic fixtures in `data/fixtures`. Every response

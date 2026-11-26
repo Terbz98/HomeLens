@@ -91,14 +91,14 @@ def load_table(path: Path) -> Optional[pd.DataFrame]:
     return pd.read_csv(path, dtype={"property_id": str}).set_index("property_id")
 
 
-def lookup(table: Optional[pd.DataFrame], property_id: Optional[str]) -> Optional[Dict]:
+def lookup(table: Optional[pd.DataFrame], property_id: Optional[str], feature_columns=FEATURE_COLUMNS) -> Optional[Dict]:
     """Features of one parcel, or None when unknown or incomplete."""
     if table is None or not property_id or property_id not in table.index:
         return None
     row = table.loc[property_id]
     if isinstance(row, pd.DataFrame):
         row = row.iloc[0]
-    values = {c: float(row[c]) for c in FEATURE_COLUMNS}
+    values = {c: float(row[c]) for c in feature_columns}
     if not all(np.isfinite(v) for v in values.values()) or values["living_sqft"] <= 0:
         return None
     return values
@@ -118,3 +118,8 @@ def describe(f: Dict) -> str:
     if f["waterfront"] > 0:
         parts.append("waterfront")
     return ", ".join(parts)
+
+
+def describe_san_francisco(f: Dict) -> str:
+    return ("{living_sqft:,.0f} sq ft, built {year_built:.0f}, {rooms:.0f} rooms, "
+            "{bedrooms:.0f} bedrooms, {bathrooms:g} bathrooms").format(**f)

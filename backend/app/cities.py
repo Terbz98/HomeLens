@@ -8,7 +8,7 @@ import pandas as pd
 from scipy.spatial import cKDTree
 
 from core.features import to_xyz_km
-from core.geo import haversine_m
+from core.geo import haversine_m, san_francisco_street_key
 
 # A point farther than this from every known ZIP center is outside the covered metro areas.
 MAX_KM_TO_ZIP_CENTER = 15.0
@@ -45,17 +45,25 @@ class Locator:
         self._zip_tree = cKDTree(to_xyz_km(table[["lat", "lon"]].to_numpy(dtype=float)))
         self._parcels = None
         self._parcel_tree = None
+        self._sf_addresses = {}
         if parcels is not None and len(parcels):
             self._parcels = parcels.reset_index(drop=True)
             self._parcel_tree = cKDTree(to_xyz_km(self._parcels[["lat", "lon"]].to_numpy(dtype=float)))
+            sf = self._parcels[self._parcels["property_id"].astype(str).str.startswith("sf-")].copy()
+            sf["street_key"] = sf["address"].map(san_francisco_street_key)
+            sf = sf[sf["street_key"].ne("")].drop_duplicates("street_key", keep=False)
+            self._sf_addresses = sf.set_index("street_key").to_dict("index")
 
     @classmethod
-    def from_files(cls, zip_table_path: Path, cities: List[Dict], parcels_path: Optional[Path]) -> "Locator":
+    def from_files(cls, zip_table_path: Path, cities: List[Dict], parcels_path: Optional[Path],
+                   sf_parcels: Optional[pd.DataFrame] = None) -> "Locator":
         zips = pd.read_csv(zip_table_path, dtype={"zip": str}, keep_default_na=False,
                            na_values={"lat": [""], "lon": [""], "zhvi_usd": [""], "zori_usd_month": [""]})
         parcels = None
         if parcels_path is not None and Path(parcels_path).exists():
             parcels = pd.read_csv(parcels_path, dtype={"zip": str, "property_id": str})
+        if sf_parcels is not None:
+            parcels = sf_parcels if parcels is None else pd.concat([parcels, sf_parcels], ignore_index=True)
         return cls(zips, cities, parcels)
 
     @property
@@ -118,11 +126,19 @@ class Locator:
         return sorted(out, key=lambda parcel: parcel["distance_m"])
 
     def parcel_for_address(self, lat: float, lon: float, address: Optional[str]) -> Optional[Dict]:
-        """The nearby parcel whose street number matches the address, if there is exactly that match."""
+        """Match an SF street address or use the existing nearby Seattle parcel lookup."""
+        sf = self.san_francisco_parcel(address)
+        if sf is not None:
+            distance = float(haversine_m(lat, lon, sf["lat"], sf["lon"]))
+            if distance <= MAX_PARCEL_DISTANCE_M:
+                return {**sf, "distance_m": round(distance, 1)}
         number = house_number(address)
         if number is None:
             return None
         for parcel in self.nearest_parcels(lat, lon, count=6):
-            if house_number(parcel["address"]) == number:
+            if not parcel["property_id"].startswith("sf-") and house_number(parcel["address"]) == number:
                 return parcel
         return None
+
+    def san_francisco_parcel(self, address: Optional[str]) -> Optional[Dict]:
+        return self._sf_addresses.get(san_francisco_street_key(address)) if address and self._sf_addresses else None

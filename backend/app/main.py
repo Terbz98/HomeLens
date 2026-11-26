@@ -56,13 +56,15 @@ def create_app(settings: Optional[Settings] = None, estimator: Optional[Estimato
         load_dotenv(ROOT / ".env")
         settings = load_settings()
     cities = load_cities()
-    if locator is None:
-        locator = Locator.from_files(settings.zip_table_path, cities, settings.parcels_path)
     if estimator is None:
         estimator = Estimator.from_dir(settings.model_dir, get_provider(settings.mapillary_token),
                                        furniture.load_package(), settings.demo,
                                        house_features_path=settings.house_features_path,
-                                       photo_mode=settings.photo_model)
+                                       photo_mode=settings.photo_model,
+                                       san_francisco_preview=settings.san_francisco_preview)
+    if locator is None:
+        sf_parcels = estimator.san_francisco["parcels"] if estimator.san_francisco else None
+        locator = Locator.from_files(settings.zip_table_path, cities, settings.parcels_path, sf_parcels)
     if geocoder is None:
         geocoder = build_geocoder(settings.geocoders, settings.geocode_timeout_s)
     limiter = RateLimiter(settings.requests_per_minute)
@@ -162,6 +164,11 @@ def create_app(settings: Optional[Settings] = None, estimator: Optional[Estimato
         zip_hint = zip_from_address(address)
         geocoded = False
         geocode_source = ""
+        if lat is None and address and ("san francisco" in address.casefold() or (zip_hint or "").startswith("941")):
+            sf_parcel = locator.san_francisco_parcel(address)
+            if sf_parcel and (not zip_hint or zip_hint == sf_parcel["zip"]):
+                lat, lng, address = sf_parcel["lat"], sf_parcel["lon"], sf_parcel["address"]
+                zip_hint = sf_parcel["zip"]
         if lat is None:
             # Address only: ask an address lookup service where it is.
             try:
@@ -245,8 +252,13 @@ def create_app(settings: Optional[Settings] = None, estimator: Optional[Estimato
         if not estimator.loaded:
             return _empty_estimate(req, "insufficient_data",
                                    "No trained models were found on the server. Train them or start the server in demo mode.", place)
+        property_id = req.property_id
+        if city["id"] == "san_francisco" and property_id and estimator.has_per_house_model(city):
+            parcel = locator.parcel_for_address(req.lat, req.lng, req.address)
+            if not parcel or parcel["property_id"] != property_id:
+                property_id = None
         result = estimator.estimate(req.lat, req.lng, city, place["metro_id"], use_image=req.use_image,
-                                    property_id=req.property_id)
+                                    property_id=property_id)
         out = _empty_estimate(req, "location_only", "", place)
         if not result["any_ok"]:
             out["status"] = "insufficient_data"

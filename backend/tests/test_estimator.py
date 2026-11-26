@@ -88,6 +88,30 @@ def test_photo_is_used_when_everything_is_available(package):
     assert any("Mapillary" in a or "Photo" in a for a in result["attributions"])
 
 
+def test_san_francisco_photo_adjusts_only_a_house_estimate(package):
+    import pandas as pd
+
+    facts = {"living_sqft": 1600, "year_built": 1920, "rooms": 6, "bedrooms": 3, "bathrooms": 2}
+    sf = {
+        "house": {"model": Constant(1_500_000), "feature_cols": list(facts), "time_index": 80, "interval": INTERVAL},
+        "photo": {"residual_model": Constant(math.log(1.1)), "interval": PHOTO_INTERVAL,
+                  "serve": True, "base": "location_plus_house_record"},
+        "photo_report": {},
+        "features": pd.DataFrame([facts], index=["sf-0001001"]),
+        "sales_from": "2024-01-01", "sales_to": "2025-12-31", "price_source": "Test sales",
+    }
+    city = {"id": "san_francisco", "name": "San Francisco"}
+    estimator = Estimator(make_bundle(), FakeProvider(), package, False,
+                          embed_fn=lambda data, encoder: np.zeros(512), san_francisco=sf)
+    with_photo = estimator.estimate(37.76, -122.48, city, "san_francisco", property_id="sf-0001001")
+    assert with_photo["prediction_mode"] == "location_plus_house_record_plus_image"
+    assert card(with_photo, "buy_unfurnished")["amount_usd"] == 1_650_000
+
+    no_record = estimator.estimate(37.76, -122.48, city, "san_francisco")
+    assert no_record["image"]["status"] == "no_photo_model"
+    assert card(no_record, "buy_unfurnished")["basis"] == "area_level_model"
+
+
 @pytest.mark.parametrize("provider,expected", [
     (FakeProvider(image=None), "unavailable"),
     (FakeProvider(fail_search=True), "error"),

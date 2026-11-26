@@ -374,6 +374,7 @@ def train_sale_model(sales: pd.DataFrame, zhvi_history: Optional[pd.DataFrame],
     model = candidates[chosen]().fit(X[fit_mask], y[fit_mask])
     test_pred = model.predict(X[masks["test"]])
     y_test = y[masks["test"]]
+    test_predictions = {main_key: test_pred}
     test = {
         "baseline_city_median": error_metrics(y_test, np.full(len(y_test), fit_df["price_usd"].median())),
         "baseline_zip_median": error_metrics(y_test, _zip_median_predict(fit_df, test_df)),
@@ -383,7 +384,9 @@ def train_sale_model(sales: pd.DataFrame, zhvi_history: Optional[pd.DataFrame],
         # The location-only model on exactly the same rows, chosen the same way, for a fair comparison.
         loc_name, _ = choose_on_validation(sale_candidates(), X[:, :3], y, masks)
         loc = sale_candidates()[loc_name]().fit(X[fit_mask][:, :3], y[fit_mask])
-        test["location_only_same_rows"] = error_metrics(y_test, loc.predict(X[masks["test"]][:, :3]))
+        location_pred = loc.predict(X[masks["test"]][:, :3])
+        test_predictions["location_only_same_rows"] = location_pred
+        test["location_only_same_rows"] = error_metrics(y_test, location_pred)
         report["location_only_model_on_same_rows"] = loc_name
     for name in (() if with_house else ("knn_k%d" % SALE_K_VALUES[2], "gbm")):
         if name != chosen:
@@ -427,7 +430,8 @@ def train_sale_model(sales: pd.DataFrame, zhvi_history: Optional[pd.DataFrame],
         "time_index": float(X[:, 2].max()),
         "interval": interval,
         "feature_cols": list(feature_cols),
-        "_eval": {"df": df, "X": X, "y": y, "masks": masks, "chosen": chosen, "make": candidates[chosen]},
+        "_eval": {"df": df, "X": X, "y": y, "masks": masks, "chosen": chosen, "make": candidates[chosen],
+                  "model": model, "test_predictions": test_predictions},
     }
     return bundle, report
 

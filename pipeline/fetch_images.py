@@ -140,9 +140,12 @@ def write_match_files(log: pd.DataFrame, processed_dir: Path) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Download licensed street photos for HomeLens.")
-    parser.add_argument("--houses", type=int, default=0, help="how many sold Seattle houses to search")
+    parser.add_argument("--city", choices=("seattle", "san_francisco"), default="seattle")
+    parser.add_argument("--houses", type=int, default=0, help="how many sold houses to search")
     parser.add_argument("--area-points", type=int, default=0, help="random spots to search per city ZIP")
     args = parser.parse_args()
+    if args.city == "san_francisco" and args.area_points:
+        parser.error("use --houses for the San Francisco photo model")
     load_dotenv(ROOT / ".env")
     provider = get_provider(os.environ.get("MAPILLARY_TOKEN", ""))
     if not provider.configured:
@@ -154,14 +157,16 @@ def main() -> int:
     load_cities()
     targets: List[Dict] = []
     if args.houses > 0:
-        sales = pd.read_csv(PROCESSED_DIR / "seattle_sales.csv", dtype={"property_id": str, "zip": str})
+        sales = pd.read_csv(PROCESSED_DIR / ("%s_sales.csv" % args.city), dtype={"property_id": str, "zip": str})
         targets += house_targets(sales, args.houses)
     if args.area_points > 0:
         zips = pd.read_csv(PROCESSED_DIR / "zip_values.csv", dtype={"zip": str}, keep_default_na=False,
                            na_values={"lat": [""], "lon": [""]})
         targets += area_targets(zips, args.area_points)
-    log = run(provider, targets, PROCESSED_DIR / "image_search_log.csv", IMAGES_DIR / "mapillary")
-    write_match_files(log, PROCESSED_DIR)
+    processed = PROCESSED_DIR / "san_francisco_photos" if args.city == "san_francisco" else PROCESSED_DIR
+    processed.mkdir(parents=True, exist_ok=True)
+    log = run(provider, targets, processed / "image_search_log.csv", IMAGES_DIR / "mapillary")
+    write_match_files(log, processed)
     print(json.dumps(coverage(log), indent=2))
     last = log.drop_duplicates("property_id", keep="last")       # a retried search has more than one row
     errors = int(last["status"].astype(str).str.startswith("error").sum())

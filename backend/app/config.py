@@ -28,6 +28,7 @@ class Settings:
     geocode_timeout_s: float = 6.0
     estimate_timeout_s: float = 25.0
     max_body_bytes: int = 10000
+    san_francisco_preview: bool = False
 
     @property
     def cors_origin_regex(self) -> str:
@@ -65,6 +66,7 @@ def load_settings(env: Optional[Mapping[str, str]] = None) -> Settings:
         extra_origins=extra,
         mapillary_token=(env.get("MAPILLARY_TOKEN") or "").strip(),
         photo_model=photo_model,
+        san_francisco_preview=not demo and _truthy(env.get("HOMELENS_SAN_FRANCISCO_PREVIEW")),
     )
     if demo:
         settings.model_dir = DEMO_MODEL_DIR

@@ -24,10 +24,10 @@ from core.paths import DATA_DIR, PROCESSED_DIR
 BATCH = 32
 
 
-def embeddings_path(encoder: str) -> Path:
+def embeddings_path(encoder: str, processed: Path = PROCESSED_DIR) -> Path:
     if encoder == DEFAULT_ENCODER:
-        return PROCESSED_DIR / "image_embeddings.npz"
-    return PROCESSED_DIR / ("image_embeddings_%s.npz" % encoder)
+        return processed / "image_embeddings.npz"
+    return processed / ("image_embeddings_%s.npz" % encoder)
 
 
 def embed_files(files: Dict[str, Path], out_path: Path, encoder: str = DEFAULT_ENCODER) -> int:
@@ -71,12 +71,14 @@ def embed_files(files: Dict[str, Path], out_path: Path, encoder: str = DEFAULT_E
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Embed downloaded photos.")
+    parser.add_argument("--city", choices=("seattle", "san_francisco"), default="seattle")
     parser.add_argument("--encoder", choices=sorted(ENCODERS) + ["all"], default="all")
     args = parser.parse_args()
     encoders = sorted(ENCODERS) if args.encoder == "all" else [args.encoder]
+    processed = PROCESSED_DIR / "san_francisco_photos" if args.city == "san_francisco" else PROCESSED_DIR
     files: Dict[str, Path] = {}
     for name in ("image_matches.csv", "area_image_points.csv"):
-        path = PROCESSED_DIR / name
+        path = processed / name
         if path.exists():
             table = pd.read_csv(path, dtype={"image_ref": str})
             for row in table.itertuples():
@@ -85,7 +87,7 @@ def main() -> int:
         print("No photos found. Run python -m pipeline.fetch_images first.")
         return 1
     for encoder in encoders:
-        added = embed_files(files, embeddings_path(encoder), encoder)
+        added = embed_files(files, embeddings_path(encoder, processed), encoder)
         print("%s: %d photos embedded, %d total listed" % (encoder, added, len(files)))
     return 0
 

@@ -70,3 +70,23 @@ _ORDINAL = re.compile(r"(\d)(St|Nd|Rd|Th)\b")
 def tidy_street(text: str) -> str:
     """'209 N 41ST ST' -> '209 N 41st St'."""
     return _ORDINAL.sub(lambda m: m.group(1) + m.group(2).lower(), str(text).strip().title())
+
+
+_SF_STREET_TYPES = {
+    "AV": "AVE", "AVENUE": "AVE", "STREET": "ST", "BOULEVARD": "BLVD", "DRIVE": "DR",
+    "ROAD": "RD", "COURT": "CT", "PLACE": "PL", "LANE": "LN", "TERRACE": "TER",
+    "HIGHWAY": "HWY", "CIRCLE": "CIR", "WAY": "WAY", "PARKWAY": "PKWY", "ALLEY": "ALY",
+}
+
+
+def san_francisco_street_key(address: str) -> str:
+    """Normalize a street line for exact EAS address matching. Keep unit designators."""
+    street, *rest = address.upper().split(",")
+    if any(re.match(r"\s*(?:APT\b|UNIT\b|SUITE\b|#)", part) for part in rest):
+        return ""
+    street = re.split(r"\s+SAN FRANCISCO\b", street, maxsplit=1)[0]
+    words = street.replace(".", "").split()
+    if len(words) < 2:
+        return ""
+    words[-1] = _SF_STREET_TYPES.get(words[-1], words[-1])
+    return " ".join(words)

@@ -11,6 +11,8 @@ Terms were read on 2026-11-11. This is a student's reading of the terms, not leg
 | King County Assessor sales | Per-house sale labels, Seattle | No | Public record, non-commercial use, names dropped |
 | King County GIS parcels | House positions and addresses, Seattle | No | Public open data, owner fields never requested |
 | King County Assessor building and parcel records | Facts about each Seattle house (living area, grade, age, rooms, lot, view) | No | Public record, non-commercial use, no names loaded |
+| DataSF assessor rolls, addresses, and building footprints | San Francisco house details, parcel matching, and detached eligibility | No | Public Domain Dedication and License |
+| RealEstateDataset San Francisco County | Recorded sale prices and dates for the San Francisco preview | No | Publisher's CC0 dedication |
 | US Census ZCTA Gazetteer | ZIP center points | No | Public domain |
 | OpenStreetMap Nominatim | Address lookup at run time | No | Allowed with attribution, light use |
 | US Census geocoder | Address lookup at run time | No | Public service |
@@ -71,6 +73,20 @@ Publishing it in the Chrome Web Store would need this question answered by Googl
 - **GIS Open Data** (parcels with address): only parcel number, address, ZIP and coordinates are
   requested, and only for Seattle single-family parcels. Owner and taxpayer fields are never requested.
 - Neither file is committed.
+
+## San Francisco preview sources
+
+DataSF publishes the [assessor roll](https://data.sf.gov/d/wv5m-vpq2),
+[Enterprise Addressing System](https://data.sf.gov/d/ramy-di5m), and
+[building footprints](https://data.sf.gov/d/ynuv-fyni) under PDDL. The assessor roll
+provides house details and sale dates. The paid prices come from a separate sales file.
+
+The October 2026 [county file](https://realestatedataset.com/california/san-francisco-county) is
+published under [CC0](https://realestatedataset.com/license). The [methodology](https://realestatedataset.com/methodology)
+describes public records and listings without naming a source for each sale. HomeLens matches
+parcel ID and street address against DataSF, reports agreement with assessor sale dates, and
+excludes identifiable nonstandard listings. Individual prices were spot checked. The file does
+not provide a deed identifier or a verified market-sale flag for every row.
 
 ## US Census Bureau
 
