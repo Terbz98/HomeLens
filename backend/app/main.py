@@ -193,11 +193,22 @@ def create_app(settings: Optional[Settings] = None, estimator: Optional[Estimato
                                                   parcel["property_id"], parcel["distance_m"],
                                                   "Matched to a single-family parcel in the county records."))
             else:
+                # The address does not match a county house. Offer the nearest houses instead of guessing.
+                for near in (locator.nearest_parcels(lat, lng, count=3) if locator.has_parcels else []):
+                    candidates.append(_make_candidate(near["lat"], near["lon"], near["address"], "parcel", near["zip"],
+                                                      near["property_id"], near["distance_m"]))
+            if candidates and candidates[0]["match"] == "parcel" and not parcel:
+                status = "needs_confirmation"
+                message = "That address did not match a house in the county records. Pick the house you mean."
+            elif candidates:
+                status = "ok"
+                message = "Check that this is the house you mean."
+            else:
                 note = ("Position from %s. It may be a few houses off." % geocode_source
                         if geocoded else "Position comes from the selected place on the map.")
                 candidates.append(_make_candidate(lat, lng, address, "geocoder" if geocoded else "place", zip_hint, note=note))
-            status = "ok"
-            message = "Check that this is the house you mean."
+                status = "ok"
+                message = "Check that this is the house you mean."
         else:
             # Position only (for example a Street View camera position): never assume which house it is.
             for parcel in locator.nearest_parcels(lat, lng, count=3):

@@ -48,6 +48,30 @@ def test_resolve_place_with_address_and_position_needs_no_geocoder(client, geoco
     assert geocoder.calls == []
 
 
+def test_resolve_unmatched_address_offers_the_three_nearest_houses(demo_settings, demo_estimator, geocoder, zip_table, cities):
+    import pandas as pd
+
+    from backend.app.cities import Locator
+    lat, lng = SEATTLE_HOUSE["lat"], SEATTLE_HOUSE["lng"]
+    parcels = pd.DataFrame({
+        "property_id": ["P1", "P2", "P3", "P4"],
+        "address": ["%d N 41st St, Seattle, WA 98103" % n for n in (201, 205, 211, 215)],
+        "zip": ["98103"] * 4,
+        "lat": [lat, lat, lat, lat],
+        "lon": [lng - 0.00005, lng + 0.0001, lng + 0.0002, lng + 0.0003],
+    })
+    c = TestClient(create_app(settings=demo_settings, estimator=demo_estimator, geocoder=geocoder,
+                              locator=Locator(zip_table, cities, parcels)))
+    body = c.post("/resolve", json={"address": "4101 Palatine Ave N, Seattle, WA 98103", "source": "place",
+                                    "lat": lat, "lng": lng}).json()
+    assert body["status"] == "needs_confirmation"
+    assert [x["property_id"] for x in body["candidates"]] == ["P1", "P2", "P3"]      # nearest three, nearest first
+    assert "did not match" in body["message"]
+    matched = c.post("/resolve", json={"address": "205 N 41st St, Seattle, WA 98103", "source": "place",
+                                       "lat": lat, "lng": lng}).json()
+    assert matched["status"] == "ok" and [x["property_id"] for x in matched["candidates"]] == ["P2"]
+
+
 def test_resolve_bare_position_always_asks_for_confirmation(client):
     body = client.post("/resolve", json={"source": "street_view", **SEATTLE_HOUSE}).json()
     assert body["status"] == "needs_confirmation"

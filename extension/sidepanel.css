@@ -355,3 +355,96 @@ legend { font-weight: 600; margin-bottom: 6px; padding: 0; }
 .sources { color: var(--muted); font-size: 12px; }
 
 .foot { color: var(--muted); font-size: 12px; text-align: center; padding: 0 6px; }
+
+/* ---------- clean result layout ---------- */
+
+.result-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.subtle { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+
+.linkish {
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  padding: 2px 0;
+  cursor: pointer;
+  white-space: nowrap;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.linkish:hover:not(:disabled) { color: var(--accent); }
+.linkish:disabled { opacity: 0.5; cursor: default; }
+
+.tiles {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.tile {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 11px;
+  border-radius: 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  min-width: 0;
+}
+
+.tile:first-child { border-color: var(--accent); }
+.tile-label { font-size: 12px; font-weight: 600; color: var(--muted); }
+
+.tile-figure {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.tile-figure .per { font-size: 12px; font-weight: 600; color: var(--muted); margin-left: 1px; }
+.tile-note { font-size: 11.5px; color: var(--muted); }
+.tile.is-missing .tile-figure { color: var(--muted); font-size: 16px; }
+
+@media (max-width: 299px) {
+  .tiles { grid-template-columns: 1fr; }
+}
+
+#details > h3 { font-size: 13px; font-weight: 700; margin-top: 12px; }
+#details dl { gap: 0; }
+#details dd p + p { margin-top: 2px; }
+#details .photo { margin-top: 4px; }
+
+.button.small { min-height: 30px; padding: 4px 10px; font-size: 12.5px; }
+
+.picks { display: flex; flex-direction: column; gap: 6px; }
+
+.pick {
+  font: inherit;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 9px 11px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.pick:hover:not(:disabled) { border-color: var(--accent); }
+.pick:disabled { opacity: 0.6; cursor: default; }
+.pick-title { font-weight: 600; overflow-wrap: anywhere; }
+.pick-note { font-size: 12px; color: var(--muted); }
+#details dd { font-weight: 400; }

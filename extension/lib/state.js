@@ -5,6 +5,8 @@
 //   - a result is only ever shown for the property it was computed for
 //   - an answer that arrives after the user moved on is ignored (stale)
 //   - a recoverable error keeps the last good result for the same property
+//   - the estimate starts by itself once one house is known (a sure match, or
+//     a house the user picked), assuming a detached house; "Not a house?" undoes that
 
 export const STATUS_LABELS = {
   select_house: "Select a house",
@@ -35,7 +37,8 @@ export function initialState() {
     selection: null,        // output of parseMapsUrl
     candidates: [],         // properties the backend offered for confirmation
     chosenId: null,         // candidate_id the user confirmed
-    propertyType: null,     // HOUSE_TYPE, "other", or null when not answered yet
+    propertyType: null,     // HOUSE_TYPE (assumed once a house is known), "other", or null
+    useImage: true,         // false after "This photo is not my house"
     result: null,           // { candidateId, response } of the last good estimate
     pending: null,          // { id, kind, body } request that is in flight
     lastFailed: null,       // { kind, body } request to repeat on "Try again"
@@ -50,10 +53,24 @@ function clearedForNewProperty(state) {
     candidates: [],
     chosenId: null,
     propertyType: null,
+    useImage: true,
     result: null,
     pending: null,
     lastFailed: null,
   };
+}
+
+// Start the estimate for the chosen house, assuming a detached single-family house.
+function startEstimate(state) {
+  const c = chosenCandidate(state);
+  if (!c || !c.supported) {
+    return state;
+  }
+  const body = { lat: c.lat, lng: c.lng, property_type: HOUSE_TYPE, use_image: state.useImage };
+  if (c.address) body.address = c.address;
+  if (c.zip) body.zip = c.zip;
+  if (c.property_id) body.property_id = c.property_id;
+  return withRequest({ ...state, propertyType: HOUSE_TYPE }, "estimate", body);
 }
 
 function withRequest(state, kind, body) {
@@ -150,21 +167,23 @@ export function reduce(state, event) {
       if (response.status === "not_found" || candidates.length === 0) {
         return { ...next, status: "select_house", candidates: [], chosenId: null };
       }
-      // Preselect only when the backend is sure which house it is. A bare map
-      // position is never preselected: the user has to pick.
-      const sure = response.status === "ok" && candidates.length === 1;
-      return { ...next, status: "confirm_property", chosenId: sure ? candidates[0].candidate_id : null };
+      // Estimate at once only when the backend is sure which house it is. A bare
+      // map position or an unmatched address is never preselected: the user picks.
+      const sure = response.status === "ok" && candidates.length === 1 && candidates[0].supported;
+      if (sure) {
+        return startEstimate({ ...next, chosenId: candidates[0].candidate_id });
+      }
+      return { ...next, status: "confirm_property", chosenId: null };
     }
 
     case "choose": {
       if (state.pending || !state.candidates.some((c) => c.candidate_id === event.candidateId)) {
         return state;
       }
-      if (event.candidateId === state.chosenId) {
+      if (event.candidateId === state.chosenId && visibleResult(state)) {
         return state;
       }
-      return { ...state, chosenId: event.candidateId, result: null, status: "confirm_property",
-               message: "Check that this is the house you mean." };
+      return startEstimate({ ...state, chosenId: event.candidateId, result: null });
     }
 
     case "property_type": {
@@ -175,20 +194,14 @@ export function reduce(state, event) {
         return { ...state, propertyType: "other", result: null, status: "unsupported_property",
                  message: "HomeLens only supports detached single-family homes." };
       }
-      return { ...state, propertyType: HOUSE_TYPE, status: "confirm_property",
-               message: "Check that this is the house you mean." };
+      return startEstimate(state);  // "It is a detached house": estimate again
     }
 
     case "estimate": {
       if (!canEstimate(state)) {
         return state;
       }
-      const c = chosenCandidate(state);
-      const body = { lat: c.lat, lng: c.lng, property_type: HOUSE_TYPE, use_image: event.useImage !== false };
-      if (c.address) body.address = c.address;
-      if (c.zip) body.zip = c.zip;
-      if (c.property_id) body.property_id = c.property_id;
-      return withRequest(state, "estimate", body);
+      return startEstimate({ ...state, useImage: event.useImage !== false });
     }
 
     case "estimated": {

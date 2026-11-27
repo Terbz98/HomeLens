@@ -1,4 +1,4 @@
-// The side panel rules: confirmation, stale answers, kept results, demo and image labels.
+// The side panel rules: instant estimate, picking a house, stale answers, kept results, demo and image labels.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
@@ -28,12 +28,17 @@ function run(state, ...events) {
   return events.reduce(reduce, state);
 }
 
-// Select an address on the map, get one sure candidate back, confirm the type.
+// Select an address on the map and get one sure candidate back: the estimate starts by itself.
+function resolvedSeattle() {
+  const s = reduce(initialState(), { type: "selection", selection: SEATTLE });
+  return reduce(s, { type: "resolved", requestId: s.pending.id,
+                     response: { status: "ok", candidates: [candidate("A", "209 N 41st St, Seattle, WA 98103")], message: "Check." } });
+}
+
+// The same, with that first estimate answered.
 function confirmedSeattle() {
-  let s = reduce(initialState(), { type: "selection", selection: SEATTLE });
-  s = reduce(s, { type: "resolved", requestId: s.pending.id,
-                  response: { status: "ok", candidates: [candidate("A", "209 N 41st St, Seattle, WA 98103")], message: "Check." } });
-  return reduce(s, { type: "property_type", value: HOUSE_TYPE });
+  const s = resolvedSeattle();
+  return reduce(s, { type: "estimated", requestId: s.pending.id, response: estimateResponse(s.pending.id) });
 }
 
 function withEstimate(state, extra) {
@@ -63,15 +68,23 @@ test("selecting an address asks the backend to resolve it, with the place positi
   assert.deepEqual(s.pending.body, { address: "209 N 41st St, Seattle, WA 98103", source: "place", lat: 47.6561157, lng: -122.3559997 });
 });
 
-test("a sure match is preselected but still needs the property type before estimating", () => {
-  let s = reduce(initialState(), { type: "selection", selection: SEATTLE });
-  s = reduce(s, { type: "resolved", requestId: s.pending.id, response: { status: "ok", candidates: [candidate("A", "209 N 41st St")], message: "" } });
-  assert.equal(s.status, "confirm_property");
+test("a sure match starts the estimate at once, assuming a detached house", () => {
+  const s = resolvedSeattle();
   assert.equal(chosenCandidate(s).candidate_id, "A");
-  assert.equal(canEstimate(s), false);                       // property type not answered yet
-  assert.equal(reduce(s, { type: "estimate" }), s);          // the estimate request is refused
-  s = reduce(s, { type: "property_type", value: HOUSE_TYPE });
-  assert.equal(canEstimate(s), true);
+  assert.equal(s.status, "loading");
+  assert.equal(s.pending.kind, "estimate");
+  assert.equal(s.pending.body.property_type, HOUSE_TYPE);
+  assert.equal(s.pending.body.property_id, "P-A");
+  assert.equal(s.pending.body.use_image, true);
+  assert.equal(s.propertyType, HOUSE_TYPE);
+});
+
+test("an unsupported single match is not estimated", () => {
+  let s = reduce(initialState(), { type: "selection", selection: SEATTLE });
+  s = reduce(s, { type: "resolved", requestId: s.pending.id,
+                  response: { status: "ok", candidates: [candidate("B", "1 A St", false)], message: "" } });
+  assert.equal(s.pending, null);
+  assert.equal(s.chosenId, null);
 });
 
 test("a Street View position never picks a house silently", () => {
@@ -82,11 +95,11 @@ test("a Street View position never picks a house silently", () => {
     candidates: [candidate("N1", "114 N 41st St"), candidate("N2", "209 N 41st St"), candidate("N3", "118 N 41st St")] } });
   assert.equal(s.status, "confirm_property");
   assert.equal(s.chosenId, null);                            // nothing preselected, not even the nearest
+  assert.equal(s.pending, null);                             // and nothing is estimated yet
   s = reduce(s, { type: "property_type", value: HOUSE_TYPE });
-  assert.equal(canEstimate(s), false);                       // still no house chosen
-  s = reduce(s, { type: "choose", candidateId: "N2" });
-  assert.equal(canEstimate(s), true);
-  s = reduce(s, { type: "estimate", useImage: true });
+  assert.equal(s.pending, null);                             // still no house chosen
+  s = reduce(s, { type: "choose", candidateId: "N2" });      // picking a house estimates it at once
+  assert.equal(s.pending.kind, "estimate");
   assert.equal(s.pending.body.address, "209 N 41st St");     // the chosen house, not the neighbor
   assert.equal(s.pending.body.property_id, "P-N2");
 });
@@ -131,12 +144,24 @@ test("unsupported location and address not found", () => {
   assert.equal(missing.message, "Not found.");
 });
 
-test("answering 'something else' gives Unsupported property and no request", () => {
+test("'Not a house?' gives Unsupported property, hides the numbers, and can be undone", () => {
   let s = confirmedSeattle();
+  assert.ok(visibleResult(s));
   s = reduce(s, { type: "property_type", value: "other" });
   assert.equal(s.status, "unsupported_property");
+  assert.equal(visibleResult(s), null);
   assert.equal(canEstimate(s), false);
   assert.equal(reduce(s, { type: "estimate" }).pending, null);
+  s = reduce(s, { type: "property_type", value: HOUSE_TYPE });   // "It is a detached house"
+  assert.equal(s.pending.kind, "estimate");
+});
+
+test("'This photo is not my house' estimates again without a photo, until another house is selected", () => {
+  let s = reduce(confirmedSeattle(), { type: "estimate", useImage: false });
+  assert.equal(s.pending.body.use_image, false);
+  assert.equal(s.useImage, false);
+  s = reduce(s, { type: "selection", selection: PORTLAND });
+  assert.equal(s.useImage, true);
 });
 
 test("a successful estimate is shown for the confirmed property", () => {
@@ -184,7 +209,7 @@ test("STALE: a late failure for an old request is ignored", () => {
 });
 
 test("an answer carrying the wrong request id is refused", () => {
-  const s = reduce(confirmedSeattle(), { type: "estimate", useImage: true });
+  const s = resolvedSeattle();
   const after = reduce(s, { type: "estimated", requestId: s.pending.id, response: estimateResponse("someone-else") });
   assert.equal(after.status, "request_failed");
   assert.equal(visibleResult(after), null);
@@ -205,12 +230,12 @@ test("switching between candidates clears the result of the other candidate", ()
   let s = reduce(initialState(), { type: "selection", selection: STREET_VIEW });
   s = reduce(s, { type: "resolved", requestId: s.pending.id, response: {
     status: "needs_confirmation", message: "", candidates: [candidate("N1", "114 N 41st St"), candidate("N2", "209 N 41st St")] } });
-  s = run(s, { type: "choose", candidateId: "N1" }, { type: "property_type", value: HOUSE_TYPE });
-  s = withEstimate(s);
+  s = reduce(s, { type: "choose", candidateId: "N1" });
+  s = reduce(s, { type: "estimated", requestId: s.pending.id, response: estimateResponse(s.pending.id) });
   assert.ok(visibleResult(s));
   s = reduce(s, { type: "choose", candidateId: "N2" });
   assert.equal(visibleResult(s), null);
-  assert.equal(s.status, "confirm_property");
+  assert.equal(s.pending.body.address, "209 N 41st St");
 });
 
 test("panning or zooming the same house keeps everything", () => {
@@ -231,7 +256,7 @@ test("backend unavailable keeps the last good result for the same property", () 
 });
 
 test("timeouts and error answers give Request failed, and Try again repeats the request with a new id", () => {
-  let s = reduce(confirmedSeattle(), { type: "estimate", useImage: true });
+  let s = resolvedSeattle();
   const firstId = s.pending.id;
   s = reduce(s, { type: "failed", requestId: firstId, errorKind: "timeout", message: "The backend did not answer in time." });
   assert.equal(s.status, "request_failed");
