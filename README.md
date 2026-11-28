@@ -155,6 +155,25 @@ unmatched address or incomplete record uses the area estimate. The default is th
 If you have a Mapillary token, use `python -m pipeline.fetch_images --city san_francisco --houses 1123`
 and `python -m pipeline.embed_images --city san_francisco`, then rerun San Francisco training.
 
+### ZIP-relative model (works in any city)
+
+Instead of the price, this model predicts how much more or less a house is worth than the typical
+house in its ZIP code (Zillow ZIP value in the sale month), from the house record only. It uses no
+latitude or longitude, so it can be used wherever Zillow publishes a ZIP value. It is trained on
+Seattle only and tested on seven other King County cities (Bellevue, Kent, Renton, Redmond,
+Kirkland, Shoreline, Auburn). Run it after the standard real-data pipeline:
+
+```bash
+python -m pipeline.king_county_cities --download
+```
+
+```bash
+python -m pipeline.train_zip_relative
+```
+
+The results are written to [docs/zip_relative_evaluation.md](docs/zip_relative_evaluation.md). The
+model is saved to `models/real/zip_relative.joblib`. The app does not use it yet.
+
 ### Demo mode (no downloads)
 
 Demo mode serves models trained on the small synthetic fixtures in `data/fixtures`. Every response

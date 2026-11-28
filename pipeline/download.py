@@ -119,9 +119,13 @@ def fetch_parcel_page(query_url: str, where: str, fields: str, offset: int, time
         return json.loads(response.read().decode("utf-8"))
 
 
-def download_parcels(raw_dir: Path = RAW_DIR, force: bool = False) -> bool:
-    """Page through the King County parcel layer and save Seattle single-family parcels."""
-    spec = load_sources()["king_county_parcels"]
+def download_parcels(raw_dir: Path = RAW_DIR, force: bool = False, spec_key: str = "king_county_parcels") -> bool:
+    """Page through the King County parcel layer and save the single-family parcels named by spec_key.
+
+    The default is Seattle. "king_county_test_city_parcels" fetches the other King County cities
+    used to test the ZIP-relative model.
+    """
+    spec = load_sources()[spec_key]
     dest = raw_dir / spec["dest"]
     if dest.exists() and not force:
         print("already have %s" % spec["id"])

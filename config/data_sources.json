@@ -73,5 +73,15 @@
     "dest": "king_county/seattle_single_family_parcels.csv",
     "what": "King County GIS Open Data layer 'Parcels for King County with Address, Property and Ownership Information'. Only Seattle parcels whose present use is 'Single Family (Res Use/Zone)', and only parcel number, address, ZIP and coordinates. Owner fields are never requested.",
     "license": "Public data published by King County GIS Open Data. Not redistributed in this repository."
+  },
+  "king_county_test_city_parcels": {
+    "id": "king_county_test_city_parcel_address",
+    "query_url": "https://services.arcgis.com/Ej0PsM5Aw677QF1W/arcgis/rest/services/PARCEL_ADDRESS_PUB_AREA_3069/FeatureServer/0/query",
+    "cities": ["Bellevue", "Kent", "Renton", "Redmond", "Kirkland", "Shoreline", "Auburn"],
+    "where": "CTYNAME IN ('Bellevue','Kent','Renton','Redmond','Kirkland','Shoreline','Auburn') AND PREUSE_CODE=2",
+    "fields": "PIN,ADDR_FULL,ZIP5,LAT,LON,PRIMARY_ADDR,CTYNAME",
+    "dest": "king_county/test_city_single_family_parcels.csv",
+    "what": "The same King County GIS layer, for single-family parcels in seven King County cities outside Seattle. Used only to test the ZIP-relative model on cities it was not trained on (pipeline/king_county_cities.py). Owner fields are never requested.",
+    "license": "Public data published by King County GIS Open Data. Not redistributed in this repository."
   }
 }
