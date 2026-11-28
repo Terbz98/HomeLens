@@ -17,40 +17,35 @@ every month. So this model does not predict the price. It predicts
     target = log(sale price) - log(Zillow value of the house's ZIP in the sale month)
 
 that is, how much more or less this house is worth than a typical house in
-its ZIP, from the house record only (living area, grade, age, condition,
-rooms, lot, view, waterfront). No latitude, no longitude, no month.
+its ZIP, from the house record only. No latitude, no longitude, no month.
 
     estimate = Zillow value of the ZIP this month * exp(predicted target)
 
-The house record is measured against the typical house of the same ZIP
-(median over every single-family parcel in the county record, no sale
-prices): living area 1.3 times the ZIP median, built 20 years later than
-the ZIP median, and so on. This matters: Seattle's typical house is old and
-on a small lot, so a model on the raw record learns "large lot, newer house
-= far above the ZIP value" and then overprices almost every suburban house,
-where that is simply the typical house. The raw-record versions are kept in
-the report to show this.
+The house record is measured against typical houses nearby, never used raw:
+    vs the ZIP          median over every single-family parcel in the ZIP
+    vs the neighbours   median over the NEIGHBORS_K nearest single-family parcels
+Both come from the county's house records, never from sale prices. This
+matters: Seattle's typical house is old and on a small lot, so a model on the
+raw record learns "large lot, newer house = far above the ZIP value" and
+overprices almost every suburban house, where that is simply the typical
+house. The raw-record versions are kept in the report to show this.
 
-Input sets (served model chosen among the first two on Seattle validation):
-    house_vs_zip_typical                 house record relative to the ZIP's typical house
-    house_vs_zip_typical_and_zip_level   the same plus log(Zillow ZIP value)
-    house_record, house_record_and_zip_level   raw record, comparison only
+Prediction needs typical houses, so a new city needs its assessor records
+with parcel positions (which Persons 1 and 2 build) but not its sale prices.
 
-Prediction needs the ZIP's typical house, so a new city needs its assessor
-records (which Persons 1 and 2 build) but not its sale prices.
-
-Test
-----
-Train on Seattle only (date-ordered split, same as pipeline/train.py). Then
-score the model on King County cities it never saw (Bellevue, Kent, ...;
-see pipeline/king_county_cities.py). For a fair comparison every model is
-scored on the same rows: the newest 20% of each test city's sales, which are
-also later than every Seattle training sale.
-
-Compared on those rows:
+Evaluation
+----------
+Train on Seattle only (date-ordered split, same as pipeline/train.py). Other
+King County cities are split in two groups, fixed in TUNING_CITIES before
+any of the choices below were tried:
+    tuning cities       used to choose the input set and to size the prediction range
+    final test cities   scored once, after every choice is made
+Every city is scored on its newest 20% of sales, all later than every Seattle
+training sale. Compared on the same rows:
     Zillow ZIP value alone           the area average, what the app shows today outside Seattle
-    Seattle house model (absolute)   pipeline/train.py's recipe, trained on Seattle, used out of city
-    ZIP-relative model               this file, trained on Seattle
+    Seattle house model (absolute)   pipeline/train.py's recipe used out of city. It uses Seattle's
+                                     latitude and longitude, so it says nothing for SF or Portland
+    ZIP-relative model               this file
     Local house model (reference)    trained on that city's own older sales; an upper reference
                                      that needs local sale prices, which Portland may not have
 
@@ -67,8 +62,10 @@ import joblib
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import HistGradientBoostingRegressor
+from sklearn.neighbors import NearestNeighbors
 
 from core import house_features
+from core.features import to_xyz_km
 from core.paths import PROCESSED_DIR, REAL_MODEL_DIR, REPORTS_DIR, ROOT
 from pipeline import train
 from pipeline.train import (INTERVAL_TARGET, MIN_CALIBRATION_ROWS, SEED, SPLIT_NAMES, assign_time_splits,
@@ -78,31 +75,42 @@ from pipeline.train import (INTERVAL_TARGET, MIN_CALIBRATION_ROWS, SEED, SPLIT_N
 MODEL_VERSION_PREFIX = "homelens-zip-relative"
 ZIP_LEVEL = "log_zip_value"
 
-# The typical house of a ZIP: medians over every single-family parcel in the county record for that
-# ZIP (not over sales, so no sale price is used). A ZIP needs MIN_PARCELS_PER_ZIP parcels.
+# Cities used for choices. Fixed before the changes they are used to choose between were tried.
+# Every other test city with enough sales is a final test city, scored once.
+TUNING_CITIES = ("Bellevue", "Kent", "Renton")
+
+# Typical houses: medians of these columns over single-family parcels (county record, no sale prices).
 TYPICAL_COLUMNS = ("living_sqft", "lot_sqft", "grade", "year_built", "condition", "bedrooms", "bathrooms")
 MIN_PARCELS_PER_ZIP = 30
-RELATIVE_COLUMNS = (
-    "rel_log_living_sqft",   # log(living area / ZIP median)
-    "rel_log_lot_sqft",      # log(lot / ZIP median)
-    "rel_grade",             # grade minus ZIP median grade
-    "rel_year_built",        # year built minus ZIP median
-    "rel_condition", "rel_bedrooms", "rel_bathrooms",
+NEIGHBORS_K = 50
+
+
+def _relative_names(prefix: str) -> Tuple[str, ...]:
+    return ("%s_log_living_sqft" % prefix, "%s_log_lot_sqft" % prefix,
+            *("%s_%s" % (prefix, c) for c in ("grade", "year_built", "condition", "bedrooms", "bathrooms")))
+
+
+ZIP_RELATIVE = _relative_names("rel")         # house vs the ZIP's typical house
+NEIGHBOR_RELATIVE = _relative_names("nb")     # house vs its NEIGHBORS_K nearest parcels
+OTHER_COLUMNS = (
     "renovated",             # 1 when ever renovated
     "basement_share",        # finished basement / living area
     "stories", "buildings_on_parcel", "view_score", "waterfront",
 )
+RELATIVE_COLUMNS = ZIP_RELATIVE + OTHER_COLUMNS   # kept for code that imported the first version
 
-# Raw house record: what a typical house looks like differs by city (Seattle's are older on smaller
-# lots), so these are kept for comparison only. See docs/zip_relative_evaluation.md.
+# Raw house record: what a typical house looks like differs by city, so these are comparison only.
 COMPARISON_VARIANTS: Dict[str, Tuple[str, ...]] = {
     "house_record": tuple(house_features.FEATURE_COLUMNS),
     "house_record_and_zip_level": tuple(house_features.FEATURE_COLUMNS) + (ZIP_LEVEL,),
 }
-# House record measured against the ZIP's typical house. The served model is chosen among these.
+# The served model is chosen among these on the tuning cities.
 SERVED_VARIANTS: Dict[str, Tuple[str, ...]] = {
-    "house_vs_zip_typical": RELATIVE_COLUMNS,
-    "house_vs_zip_typical_and_zip_level": RELATIVE_COLUMNS + (ZIP_LEVEL,),
+    "house_vs_zip_typical": ZIP_RELATIVE + OTHER_COLUMNS,
+    "house_vs_zip_typical_and_zip_level": ZIP_RELATIVE + OTHER_COLUMNS + (ZIP_LEVEL,),
+    "house_vs_neighbors": NEIGHBOR_RELATIVE + OTHER_COLUMNS,
+    "house_vs_neighbors_and_zip_level": NEIGHBOR_RELATIVE + OTHER_COLUMNS + (ZIP_LEVEL,),
+    "house_vs_zip_and_neighbors_and_zip_level": ZIP_RELATIVE + NEIGHBOR_RELATIVE + OTHER_COLUMNS + (ZIP_LEVEL,),
 }
 VARIANTS: Dict[str, Tuple[str, ...]] = {**COMPARISON_VARIANTS, **SERVED_VARIANTS}
 MIN_CITY_SALES = 200       # a test city needs this many sales to be reported on its own
@@ -115,7 +123,7 @@ class ZipRelativeModel:
     """Predicts a dollar price from the house record and the ZIP's Zillow value.
 
     Fitted on rows with a 'zhvi_usd' column (the ZIP's value in the sale month)
-    and the house record columns. predict() needs the same columns.
+    and the feature columns made by prepare(). predict() needs the same columns.
     """
 
     def __init__(self, regressor, feature_cols: Sequence[str]):
@@ -184,30 +192,59 @@ def zip_typical_houses(features: pd.DataFrame, parcels: pd.DataFrame) -> pd.Data
     return typical[typical["parcels"] >= MIN_PARCELS_PER_ZIP]
 
 
+def _add_relative(out: pd.DataFrame, typical: Dict[str, np.ndarray], prefix: str) -> None:
+    v = lambda c: out[c].to_numpy(dtype=float)
+    out[prefix + "_log_living_sqft"] = np.log(np.maximum(v("living_sqft"), 1) / np.maximum(typical["living_sqft"], 1))
+    out[prefix + "_log_lot_sqft"] = np.log(np.maximum(v("lot_sqft"), 1) / np.maximum(typical["lot_sqft"], 1))
+    for c in ("grade", "year_built", "condition", "bedrooms", "bathrooms"):
+        out[prefix + "_" + c] = v(c) - typical[c]
+
+
 def add_relative_features(df: pd.DataFrame, typical: pd.DataFrame) -> pd.DataFrame:
-    """Add RELATIVE_COLUMNS. Rows whose ZIP has no typical house are dropped."""
+    """Add ZIP_RELATIVE and OTHER_COLUMNS. Rows whose ZIP has no typical house are dropped."""
     t = typical.reindex(df["zip"].astype(str).str.zfill(5))
     keep = t["parcels"].notna().to_numpy()
     out = df[keep].copy()
     t = t[keep]
-    v = lambda c: out[c].to_numpy(dtype=float)
-    m = lambda c: t[c].to_numpy(dtype=float)
-    out["rel_log_living_sqft"] = np.log(np.maximum(v("living_sqft"), 1) / np.maximum(m("living_sqft"), 1))
-    out["rel_log_lot_sqft"] = np.log(np.maximum(v("lot_sqft"), 1) / np.maximum(m("lot_sqft"), 1))
-    for c in ("grade", "year_built", "condition", "bedrooms", "bathrooms"):
-        out["rel_" + c] = v(c) - m(c)
-    out["renovated"] = (v("year_renovated") > 0).astype(float)
-    out["basement_share"] = v("basement_sqft") / np.maximum(v("living_sqft"), 1)
+    _add_relative(out, {c: t[c].to_numpy(dtype=float) for c in TYPICAL_COLUMNS}, "rel")
+    out["renovated"] = (out["year_renovated"].to_numpy(dtype=float) > 0).astype(float)
+    out["basement_share"] = out["basement_sqft"].to_numpy(dtype=float) / np.maximum(out["living_sqft"].to_numpy(dtype=float), 1)
     return out.reset_index(drop=True)
+
+
+def add_neighbor_features(df: pd.DataFrame, features: pd.DataFrame, parcels: pd.DataFrame,
+                          k: int = NEIGHBORS_K) -> pd.DataFrame:
+    """Add NEIGHBOR_RELATIVE: the house against the median of its k nearest single-family parcels.
+
+    The house's own parcel is never one of its neighbours. Positions only pick the neighbours;
+    they are not model inputs.
+    """
+    pos = parcels.drop_duplicates("property_id").set_index("property_id")[["lat", "lon"]]
+    table = features[list(TYPICAL_COLUMNS)].join(pos, how="inner").dropna()
+    if len(table) <= k:
+        raise ValueError("Need more than %d parcels with a house record and a position" % k)
+    index = NearestNeighbors(n_neighbors=k + 1).fit(to_xyz_km(table[["lat", "lon"]].to_numpy(dtype=float)))
+    _, idx = index.kneighbors(to_xyz_km(df[["lat", "lon"]].to_numpy(dtype=float)))
+    values = table[list(TYPICAL_COLUMNS)].to_numpy(dtype=float)[idx]           # (rows, k + 1, columns)
+    is_self = table.index.to_numpy()[idx] == df["property_id"].to_numpy()[:, None]
+    # Drop the house itself, or the farthest neighbour when the house is not in the table.
+    drop = is_self.copy()
+    drop[~is_self.any(axis=1), -1] = True
+    values[drop] = np.nan
+    medians = np.nanmedian(values, axis=1)
+    out = df.copy()
+    _add_relative(out, {c: medians[:, i] for i, c in enumerate(TYPICAL_COLUMNS)}, "nb")
+    return out
 
 
 def prepare(sales: pd.DataFrame, features: pd.DataFrame, parcels: pd.DataFrame,
             zhvi_history: pd.DataFrame) -> Tuple[pd.DataFrame, Dict]:
     """House record (with the built-after-sale rule of pipeline/train.py), the ZIP value, and the
-    house record measured against the ZIP's typical house."""
+    house record measured against the ZIP's typical house and against its neighbours."""
     df, house_counts = with_house_features(sales, features)
     df, zip_counts = attach_zip_value(df, zhvi_history)
     df = add_relative_features(df, zip_typical_houses(features, parcels))
+    df = add_neighbor_features(df, features, parcels)
     return df, {**house_counts, "kept_with_zip_value": zip_counts["with_a_zillow_zip_value_in_the_sale_month"],
                 "kept_with_a_typical_house_for_the_zip": int(len(df))}
 
@@ -240,8 +277,8 @@ def versus(y, base, new, groups=None) -> Dict:
 
 # ------------------------------------------------------------------ training
 
-def fit_zip_relative(df: pd.DataFrame, masks: Dict[str, np.ndarray]) -> Tuple[Dict, Dict]:
-    """Choose input set and settings on the Seattle validation split, then refit on train + val."""
+def fit_zip_relative(df: pd.DataFrame, masks: Dict[str, np.ndarray]) -> Tuple[Dict[str, "ZipRelativeModel"], Dict]:
+    """Per input set: choose tree settings on the Seattle validation split, then refit on train + val."""
     y = df["price_usd"].to_numpy(dtype=float)
     val_mae: Dict[str, float] = {}
     for variant, cols in VARIANTS.items():
@@ -250,17 +287,12 @@ def fit_zip_relative(df: pd.DataFrame, masks: Dict[str, np.ndarray]) -> Tuple[Di
             val_mae[variant + "/" + name] = error_metrics(y[masks["val"]], model.predict(df[masks["val"]]))["mae"]
     fit = masks["train"] | masks["val"]
     fitted: Dict[str, ZipRelativeModel] = {}
-    chosen_per_variant: Dict[str, str] = {}
+    settings: Dict[str, str] = {}
     for variant, cols in VARIANTS.items():
         best = min((k for k in val_mae if k.startswith(variant + "/")), key=val_mae.get)
-        chosen_per_variant[variant] = best.split("/", 1)[1]
-        fitted[variant] = ZipRelativeModel(regressor_candidates()[chosen_per_variant[variant]](), cols).fit(
-            df[fit], y[fit])
-    # Raw-record variants are scored for comparison but never served (see COMPARISON_VARIANTS).
-    chosen = min(SERVED_VARIANTS, key=lambda v: val_mae[v + "/" + chosen_per_variant[v]])
-    report = {"validation_mae": val_mae, "settings_chosen_per_input_set": chosen_per_variant,
-              "input_set_chosen_on_validation": chosen}
-    return {"models": fitted, "chosen": chosen}, report
+        settings[variant] = best.split("/", 1)[1]
+        fitted[variant] = ZipRelativeModel(regressor_candidates()[settings[variant]](), cols).fit(df[fit], y[fit])
+    return fitted, {"seattle_validation_mae": val_mae, "settings_chosen_per_input_set": settings}
 
 
 def fit_absolute_house_model(df: pd.DataFrame, masks: Dict[str, np.ndarray]) -> Tuple[object, str]:
@@ -273,36 +305,38 @@ def fit_absolute_house_model(df: pd.DataFrame, masks: Dict[str, np.ndarray]) -> 
     return house_candidates()[chosen]().fit(X[fit], y[fit]), chosen
 
 
-def conformal_interval(model: ZipRelativeModel, df: pd.DataFrame, cal_mask: np.ndarray) -> Optional[Dict]:
-    n_cal = int(cal_mask.sum())
-    if n_cal < MIN_CALIBRATION_ROWS:
+def conformal_interval(prices: np.ndarray, pred: np.ndarray, source: str) -> Optional[Dict]:
+    """Split-conformal range on relative error from calibration rows."""
+    if len(prices) < MIN_CALIBRATION_ROWS:
         return None
-    cal = df[cal_mask]
-    pred = model.predict(cal)
-    q = conformal_quantile(np.abs(cal["price_usd"].to_numpy(dtype=float) - pred) / pred, INTERVAL_TARGET)
-    return {"method": "split conformal on relative error, Seattle calibration split",
-            "target_coverage": INTERVAL_TARGET, "relative_half_width": round(q, 4), "n_calibration": n_cal}
+    q = conformal_quantile(np.abs(np.asarray(prices, dtype=float) - pred) / pred, INTERVAL_TARGET)
+    return {"method": "split conformal on relative error", "calibrated_on": source,
+            "target_coverage": INTERVAL_TARGET, "relative_half_width": round(q, 4), "n_calibration": int(len(prices))}
 
 
-def coverage(model: ZipRelativeModel, df: pd.DataFrame, interval: Optional[Dict]) -> Optional[float]:
-    if not interval or df.empty:
+def coverage(prices, pred, interval: Optional[Dict]) -> Optional[float]:
+    if not interval or len(prices) == 0:
         return None
-    pred = model.predict(df)
-    return round(float(np.mean(np.abs(df["price_usd"].to_numpy(dtype=float) - pred) / pred
-                               <= interval["relative_half_width"])), 4)
+    prices = np.asarray(prices, dtype=float)
+    return round(float(np.mean(np.abs(prices - pred) / pred <= interval["relative_half_width"])), 4)
 
 
-def evaluate_city(name: str, df: pd.DataFrame, zr: Dict, absolute, interval: Optional[Dict]) -> Dict:
+def city_test_rows(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, np.ndarray]]:
+    """A city's sales with date-ordered splits. Its test split is the newest 20%."""
+    split_df, _ = assign_time_splits(df)
+    return split_df, masks_of(split_df)
+
+
+def evaluate_city(name: str, role: str, df: pd.DataFrame, models: Dict[str, "ZipRelativeModel"], chosen: str,
+                  absolute, intervals: Dict[str, Optional[Dict]]) -> Dict:
     """Every model on the same rows: the newest 20% of this city's sales."""
-    split_df, removed = assign_time_splits(df)
-    masks = masks_of(split_df)
-    report: Dict = {"city": name, "sales_with_record_and_zip_value": int(len(df)),
+    split_df, masks = city_test_rows(df)
+    report: Dict = {"city": name, "role": role, "sales_with_record_and_zip_value": int(len(df)),
                     "splits": split_summary(split_df, masks)}
     test = split_df[masks["test"]]
     y = test["price_usd"].to_numpy(dtype=float)
-    chosen = zr["models"][zr["chosen"]]
     preds = {"zillow_zip_value": test["zhvi_usd"].to_numpy(dtype=float)}
-    for variant, model in zr["models"].items():
+    for variant, model in models.items():
         preds["zip_relative_" + variant] = model.predict(test)
     preds["seattle_house_model_absolute"] = absolute.predict(sale_matrix(test, tuple(house_features.FEATURE_COLUMNS)))
     local_name = None
@@ -312,26 +346,29 @@ def evaluate_city(name: str, df: pd.DataFrame, zr: Dict, absolute, interval: Opt
     report["test_rows"] = {k: scores(y, p) for k, p in preds.items()}
     report["test_median_sale_price"] = round(float(np.median(y)), 2) if len(y) else None
     report["local_reference_settings"] = local_name
-    chosen_key = "zip_relative_" + zr["chosen"]
+    chosen_key = "zip_relative_" + chosen
     report["zip_relative_vs_zillow"] = versus(y, preds["zillow_zip_value"], preds[chosen_key], test["zip"].to_numpy())
     report["zip_relative_vs_seattle_absolute"] = versus(y, preds["seattle_house_model_absolute"], preds[chosen_key],
                                                         test["zip"].to_numpy())
-    report["interval_coverage_on_test_rows"] = coverage(chosen, test, interval)
-    # More rows, every sale of the city. Earlier ones overlap Seattle's training dates, so this is secondary.
-    report["all_sales"] = {"zillow_zip_value": scores(df["price_usd"], df["zhvi_usd"]),
-                           chosen_key: scores(df["price_usd"], chosen.predict(df)),
-                           "interval_coverage": coverage(chosen, df, interval)}
+    report["interval_coverage_on_test_rows"] = {k: coverage(y, preds[chosen_key], v) for k, v in intervals.items()}
     return report
 
 
 def train_zip_relative(seattle_sales: pd.DataFrame, seattle_features: pd.DataFrame, seattle_parcels: pd.DataFrame,
                        test_sales: pd.DataFrame, test_features: pd.DataFrame, test_parcels: pd.DataFrame,
-                       zhvi_history: pd.DataFrame) -> Tuple[Dict, Dict]:
-    """Train on Seattle, test on Seattle's newest sales and on every test city. Returns (artifact, report)."""
+                       zhvi_history: pd.DataFrame,
+                       tuning_cities: Sequence[str] = TUNING_CITIES) -> Tuple[Dict, Dict]:
+    """Train on Seattle, choose on the tuning cities, score once on the final test cities.
+
+    Returns (artifact, report).
+    """
     report: Dict = {"target": "log(sale price) - log(Zillow ZIP value in the sale month)",
                     "input_sets": {k: list(v) for k, v in VARIANTS.items()},
                     "served_input_sets": list(SERVED_VARIANTS),
+                    "neighbors_k": NEIGHBORS_K,
                     "trained_on": "Seattle sales only"}
+
+    # 1. Seattle: date-ordered splits, models fitted on train + val.
     sea, report["seattle_rows"] = prepare(seattle_sales, seattle_features, seattle_parcels, zhvi_history)
     if len(sea) < train.MIN_SALE_ROWS:
         raise ValueError("Too few Seattle sales with a house record and a ZIP value: %d" % len(sea))
@@ -339,45 +376,71 @@ def train_zip_relative(seattle_sales: pd.DataFrame, seattle_features: pd.DataFra
     masks = masks_of(sea)
     report["seattle_splits"] = split_summary(sea, masks)
     report["seattle_repeat_sale_rows_removed"] = removed
-
-    zr, report["selection"] = fit_zip_relative(sea, masks)
+    models, report["selection"] = fit_zip_relative(sea, masks)
     absolute, report["seattle_absolute_settings"] = fit_absolute_house_model(sea, masks)
-    chosen = zr["models"][zr["chosen"]]
-    interval = conformal_interval(chosen, sea, masks["cal"])
-    report["interval"] = interval or {"status": "unavailable", "reason": "too few calibration rows"}
 
+    # 2. Test cities: which are for tuning and which are scored once.
+    tc, report["test_city_rows"] = prepare(test_sales, test_features, test_parcels, zhvi_history)
+    cities = {name: g.reset_index(drop=True) for name, g in sorted(tc.groupby("city"))}
+    small = {name: int(len(g)) for name, g in cities.items() if len(g) < MIN_CITY_SALES}
+    cities = {name: g for name, g in cities.items() if name not in small}
+    tuning = [c for c in cities if c in set(tuning_cities)]
+    final = [c for c in cities if c not in set(tuning_cities)]
+    if not tuning or not final:
+        raise ValueError("Need at least one tuning city and one final test city, have %s and %s" % (tuning, final))
+    report["tuning_cities"], report["final_test_cities"], report["cities_with_too_few_sales"] = tuning, final, small
+
+    # 3. Choose the input set on the tuning cities' newest sales (pooled MAE).
+    tuning_rows = pd.concat([city_test_rows(cities[c])[0].pipe(lambda d: d[d["split"] == "test"]) for c in tuning],
+                            ignore_index=True)
+    y_tune = tuning_rows["price_usd"].to_numpy(dtype=float)
+    tuning_mae = {v: error_metrics(y_tune, models[v].predict(tuning_rows))["mae"] for v in VARIANTS}
+    chosen = min(SERVED_VARIANTS, key=tuning_mae.get)
+    report["selection"].update({"tuning_mae_per_input_set": tuning_mae, "tuning_rows": int(len(tuning_rows)),
+                                "input_set_chosen_on_tuning_cities": chosen})
+
+    # 4. Prediction range. Seattle's calibration split (as in pipeline/train.py) versus the tuning cities,
+    #    whose errors are those of a model used in a city it was not trained on.
+    sea_cal = sea[masks["cal"]]
+    intervals = {
+        "seattle_calibration": conformal_interval(sea_cal["price_usd"].to_numpy(dtype=float),
+                                                  models[chosen].predict(sea_cal), "Seattle calibration split"),
+        "tuning_cities": conformal_interval(y_tune, models[chosen].predict(tuning_rows),
+                                            "tuning cities' newest sales: " + ", ".join(tuning)),
+    }
+    report["intervals"] = intervals
+
+    # 5. Seattle test split, then every city.
     test = sea[masks["test"]]
     y = test["price_usd"].to_numpy(dtype=float)
     preds = {"zillow_zip_value": test["zhvi_usd"].to_numpy(dtype=float),
              "seattle_house_model_absolute": absolute.predict(sale_matrix(test, tuple(house_features.FEATURE_COLUMNS)))}
-    for variant, model in zr["models"].items():
+    for variant, model in models.items():
         preds["zip_relative_" + variant] = model.predict(test)
     report["seattle_test"] = {k: scores(y, p) for k, p in preds.items()}
-    report["seattle_test"]["interval_coverage"] = coverage(chosen, test, interval)
+    report["seattle_test_interval_coverage"] = {k: coverage(y, preds["zip_relative_" + chosen], v)
+                                                for k, v in intervals.items()}
+    report["cities"] = {name: evaluate_city(name, "tuning" if name in tuning else "final_test", cities[name],
+                                            models, chosen, absolute, intervals) for name in cities}
+    report["all_tuning_cities"] = pooled({c: report["cities"][c] for c in tuning})
+    report["all_final_test_cities"] = pooled({c: report["cities"][c] for c in final})
+    report["all_final_test_cities_interval_coverage"] = pooled_coverage({c: report["cities"][c] for c in final})
 
-    tc, report["test_city_rows"] = prepare(test_sales, test_features, test_parcels, zhvi_history)
-    report["test_cities"] = {}
-    for name, city_df in sorted(tc.groupby("city")):
-        if len(city_df) < MIN_CITY_SALES:
-            report["test_cities"][name] = {"status": "too_few_sales", "sales": int(len(city_df))}
-            continue
-        report["test_cities"][name] = evaluate_city(name, city_df.reset_index(drop=True), zr, absolute, interval)
-    report["all_test_cities"] = pooled(report["test_cities"])
-
-    served = {}
-    y_all = sea["price_usd"].to_numpy(dtype=float)
-    settings = report["selection"]["settings_chosen_per_input_set"][zr["chosen"]]
-    served[zr["chosen"]] = ZipRelativeModel(regressor_candidates()[settings](), VARIANTS[zr["chosen"]]).fit(sea, y_all)
+    # 6. Served model: the chosen recipe refit on every Seattle sale, with the tuning-city range.
+    settings = report["selection"]["settings_chosen_per_input_set"][chosen]
+    served = ZipRelativeModel(regressor_candidates()[settings](), VARIANTS[chosen]).fit(
+        sea, sea["price_usd"].to_numpy(dtype=float))
     stamp = datetime.now(timezone.utc)
     artifact = {
-        "model": served[zr["chosen"]],
-        "input_set": zr["chosen"],
-        "feature_cols": list(VARIANTS[zr["chosen"]]),
-        "interval": interval,
+        "model": served,
+        "input_set": chosen,
+        "feature_cols": list(VARIANTS[chosen]),
+        "neighbors_k": NEIGHBORS_K,
+        "interval": intervals["tuning_cities"],
         "model_version": "%s-%s" % (MODEL_VERSION_PREFIX, stamp.strftime("%Y%m%d")),
         "trained_utc": stamp.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "note": "Served model refit on every Seattle sale. Test numbers describe the version fitted without "
-                "Seattle's calibration and test sales.",
+                "Seattle's calibration and test sales. Inputs are made by prepare().",
     }
     report["model_version"] = artifact["model_version"]
     report["trained_utc"] = artifact["trained_utc"]
@@ -385,7 +448,7 @@ def train_zip_relative(seattle_sales: pd.DataFrame, seattle_features: pd.DataFra
 
 
 def pooled(cities: Dict) -> Dict:
-    """Row-weighted MAE over every reported test city, per model."""
+    """Row-weighted MAE over the given cities, per model."""
     out: Dict[str, Dict] = {}
     for city in cities.values():
         for model, s in city.get("test_rows", {}).items():
@@ -397,15 +460,34 @@ def pooled(cities: Dict) -> Dict:
             for m, a in out.items() if a["n"]}
 
 
+def pooled_coverage(cities: Dict) -> Dict:
+    """Row-weighted interval coverage of the chosen model over the given cities."""
+    out: Dict[str, float] = {}
+    for key in ("seattle_calibration", "tuning_cities"):
+        hits = n = 0.0
+        for city in cities.values():
+            cov = city["interval_coverage_on_test_rows"].get(key)
+            rows = city["splits"]["test"]["n"]
+            if cov is not None:
+                hits += cov * rows
+                n += rows
+        out[key] = round(hits / n, 4) if n else None
+    return out
+
+
 # ------------------------------------------------------------------ report
 
 LABELS = {
     "zillow_zip_value": "Zillow ZIP value alone (area average)",
     "seattle_house_model_absolute": "Seattle house model, absolute (lat, lon, month, house record)",
-    "zip_relative_house_record": "ZIP-relative, house record",
-    "zip_relative_house_record_and_zip_level": "ZIP-relative, house record + ZIP value level",
-    "zip_relative_house_vs_zip_typical": "ZIP-relative, house vs ZIP typical house",
-    "zip_relative_house_vs_zip_typical_and_zip_level": "ZIP-relative, house vs ZIP typical house + ZIP value level",
+    "zip_relative_house_record": "ZIP-relative, raw house record (comparison)",
+    "zip_relative_house_record_and_zip_level": "ZIP-relative, raw house record + ZIP value level (comparison)",
+    "zip_relative_house_vs_zip_typical": "ZIP-relative, vs ZIP typical house",
+    "zip_relative_house_vs_zip_typical_and_zip_level": "ZIP-relative, vs ZIP typical house + ZIP value level",
+    "zip_relative_house_vs_neighbors": "ZIP-relative, vs %d nearest houses" % NEIGHBORS_K,
+    "zip_relative_house_vs_neighbors_and_zip_level": "ZIP-relative, vs %d nearest houses + ZIP value level"
+                                                     % NEIGHBORS_K,
+    "zip_relative_house_vs_zip_and_neighbors_and_zip_level": "ZIP-relative, vs ZIP and nearest houses + ZIP value level",
     "local_house_model_reference": "Local house model (reference, trained on this city)",
 }
 
@@ -414,19 +496,56 @@ def _money(v) -> str:
     return "" if v is None else "${:,.0f}".format(v)
 
 
-def _table(rows: Dict[str, Dict]) -> List[str]:
+def _pct(v) -> str:
+    return "" if v is None else "%.1f%%" % (100 * v)
+
+
+def _label(key: str, chosen: str) -> str:
+    text = LABELS.get(key, key)
+    return "**%s (chosen)**" % text if key == "zip_relative_" + chosen else text
+
+
+def _table(rows: Dict[str, Dict], chosen: str) -> List[str]:
     lines = ["| Model | Rows | MAE | RMSE | Median % error |", "|---|---:|---:|---:|---:|"]
     for key, s in rows.items():
         if not isinstance(s, dict) or "mae" not in s:
             continue
-        lines.append("| %s | %d | %s | %s | %s%% |" % (LABELS.get(key, key), s["n"], _money(s["mae"]),
+        lines.append("| %s | %d | %s | %s | %s%% |" % (_label(key, chosen), s["n"], _money(s["mae"]),
                                                      _money(s.get("rmse")), s.get("median_percent_error")))
+    return lines
+
+
+def _pooled_table(rows: Dict[str, Dict], chosen: str) -> List[str]:
+    lines = ["| Model | Cities | Rows | MAE |", "|---|---:|---:|---:|"]
+    for key, s in rows.items():
+        lines.append("| %s | %d | %d | %s |" % (_label(key, chosen), s["cities"], s["n"], _money(s["mae"])))
+    return lines
+
+
+def _city_section(name: str, city: Dict, chosen: str) -> List[str]:
+    t = city["splits"]["test"]
+    lines = ["", "### %s" % name, "",
+             "Test rows: %d sales, %s to %s. Median sale price %s." % (
+                 t["n"], t["from"], t["to"], _money(city["test_median_sale_price"])), ""]
+    lines += _table(city["test_rows"], chosen)
+    vz, va = city["zip_relative_vs_zillow"], city["zip_relative_vs_seattle_absolute"]
+    cov = city["interval_coverage_on_test_rows"]
+    lines += ["",
+              "Chosen model versus Zillow ZIP value: MAE lowered by %s, 95%% range %s to %s (whole ZIPs resampled): "
+              "%s." % (_money(vz["mae_lowered_by_usd"]), _money(vz["range_95_usd"][0]),
+                       _money(vz["range_95_usd"][1]), vz["verdict"]),
+              "Chosen model versus the Seattle absolute model: MAE lowered by %s: %s." % (
+                  _money(va["mae_lowered_by_usd"]), va["verdict"]),
+              "Range coverage (target %d%%): %s with the Seattle-calibrated range, %s with the tuning-city range." % (
+                  100 * INTERVAL_TARGET, _pct(cov.get("seattle_calibration")), _pct(cov.get("tuning_cities")))]
     return lines
 
 
 def write_markdown(report: Dict, path: Path = DOC_PATH) -> None:
     sel = report["selection"]
+    chosen = sel["input_set_chosen_on_tuning_cities"]
     sp = report["seattle_splits"]
+    iv = report["intervals"]
     lines = [
         "# ZIP-relative model: evaluation report",
         "",
@@ -434,52 +553,60 @@ def write_markdown(report: Dict, path: Path = DOC_PATH) -> None:
         "",
         "- Model version: `%s`, trained (UTC) %s" % (report["model_version"], report["trained_utc"]),
         "- Target: %s. The estimate is the ZIP value times exp(prediction)." % report["target"],
-        "- No latitude, longitude or month is used, so the model can be applied in any US ZIP Zillow covers.",
-        "- Trained on Seattle sales only. Input set chosen on the Seattle validation split: `%s`."
-        % sel["input_set_chosen_on_validation"],
+        "- No latitude, longitude or month is a model input, so the model can be applied in any US ZIP Zillow "
+        "covers, given the county's house records for that area.",
+        "- Trained on Seattle sales only.",
+        "- Tuning cities (used to choose the input set and to size the range): %s." % ", ".join(report["tuning_cities"]),
+        "- Final test cities (scored once, after every choice): %s." % ", ".join(report["final_test_cities"]),
+        "- Chosen input set: `%s`." % chosen,
         "",
-        "## Seattle (same city, newest sales)",
+        "Note on honesty: an earlier version of this report scored all seven cities together. Its result (the raw "
+        "house record overprices suburban houses) led to measuring houses against typical houses. The tuning and "
+        "final groups above were fixed after that and before the neighbour comparison, the input set choice and "
+        "the range calibration were tried.",
         "",
-        "Seattle sales with a house record and a ZIP value: %d. Date-ordered splits: train %d (%s to %s), "
-        "val %d, cal %d, test %d (%s to %s)." % (
-            report["seattle_rows"]["kept_with_a_typical_house_for_the_zip"], sp["train"]["n"], sp["train"]["from"], sp["train"]["to"],
-            sp["val"]["n"], sp["cal"]["n"], sp["test"]["n"], sp["test"]["from"], sp["test"]["to"]),
+        "## Final test cities (never used for any choice)",
         "",
     ]
-    lines += _table(report["seattle_test"])
-    interval = report.get("interval") or {}
-    if "relative_half_width" in interval:
-        lines += ["", "Prediction range: plus or minus %.1f%% (split conformal, target %d%%). Measured coverage on "
-                  "the Seattle test split: %.1f%%." % (100 * interval["relative_half_width"],
-                                                     100 * interval["target_coverage"],
-                                                     100 * (report["seattle_test"]["interval_coverage"] or 0))]
-    lines += ["", "## Other King County cities (never seen in training)", "",
-              "Each city is scored on its newest 20% of sales, all later than every Seattle training sale. "
-              "Every model is scored on the same rows. The local model is a reference only: it needs local "
-              "sale prices, which is exactly what is missing in cities like Portland.", ""]
-    lines += ["### All test cities together", "", "| Model | Cities | Rows | MAE |", "|---|---:|---:|---:|"]
-    for key, s in report["all_test_cities"].items():
-        lines.append("| %s | %d | %d | %s |" % (LABELS.get(key, key), s["cities"], s["n"], _money(s["mae"])))
-    for name, city in report["test_cities"].items():
-        lines += ["", "### %s" % name, ""]
-        if city.get("status") == "too_few_sales":
-            lines.append("Only %d sales, not reported." % city["sales"])
-            continue
-        t = city["splits"]["test"]
-        lines += ["Test rows: %d sales, %s to %s. Median sale price %s." % (
-            t["n"], t["from"], t["to"], _money(city["test_median_sale_price"])), ""]
-        lines += _table(city["test_rows"])
-        vz = city["zip_relative_vs_zillow"]
-        va = city["zip_relative_vs_seattle_absolute"]
-        lines += ["",
-                  "ZIP-relative versus Zillow ZIP value: MAE lowered by %s, 95%% range %s to %s (whole ZIPs resampled): "
-                  "%s." % (_money(vz["mae_lowered_by_usd"]), _money(vz["range_95_usd"][0]),
-                           _money(vz["range_95_usd"][1]), vz["verdict"]),
-                  "ZIP-relative versus the Seattle absolute model: MAE lowered by %s: %s." % (
-                      _money(va["mae_lowered_by_usd"]), va["verdict"])]
-        if city.get("interval_coverage_on_test_rows") is not None:
-            lines.append("Coverage of the Seattle prediction range here: %.1f%% (target %d%%)." % (
-                100 * city["interval_coverage_on_test_rows"], 100 * INTERVAL_TARGET))
+    lines += _pooled_table(report["all_final_test_cities"], chosen)
+    pc = report["all_final_test_cities_interval_coverage"]
+    lines += ["", "Prediction range of the chosen model, target coverage %d%%:" % (100 * INTERVAL_TARGET), "",
+              "| Range calibrated on | Half width | Coverage on final test cities |", "|---|---:|---:|"]
+    for key, label in (("seattle_calibration", "Seattle calibration split"),
+                       ("tuning_cities", "Tuning cities (served)")):
+        if iv.get(key):
+            lines.append("| %s | plus or minus %s | %s |" % (label, _pct(iv[key]["relative_half_width"]), _pct(pc.get(key))))
+    lines += ["", "Each city is scored on its newest 20% of sales, all later than every Seattle training sale. Every "
+              "model is scored on the same rows. The Seattle absolute model uses Seattle's latitude and longitude, "
+              "so it is only meaningful near Seattle and is not an option for San Francisco or Portland. The local "
+              "model is a reference only: it needs local sale prices."]
+    for name in report["final_test_cities"]:
+        lines += _city_section(name, report["cities"][name], chosen)
+
+    lines += ["", "## Tuning cities (used for the choices above)", "",
+              "Input set chosen by pooled MAE over the newest sales of these cities (%d rows):" % sel["tuning_rows"], "",
+              "| Input set | Tuning MAE | Seattle validation MAE |", "|---|---:|---:|"]
+    for v in VARIANTS:
+        seattle_val = sel["seattle_validation_mae"][v + "/" + sel["settings_chosen_per_input_set"][v]]
+        lines.append("| %s | %s | %s |" % (_label("zip_relative_" + v, chosen), _money(sel["tuning_mae_per_input_set"][v]),
+                                          _money(seattle_val)))
+    lines += [""] + _pooled_table(report["all_tuning_cities"], chosen)
+    for name in report["tuning_cities"]:
+        lines += _city_section(name, report["cities"][name], chosen)
+
+    lines += ["", "## Seattle (same city, newest sales)", "",
+              "Seattle sales with a house record and a ZIP value: %d. Date-ordered splits: train %d (%s to %s), "
+              "val %d, cal %d, test %d (%s to %s)." % (
+                  report["seattle_rows"]["kept_with_a_typical_house_for_the_zip"], sp["train"]["n"],
+                  sp["train"]["from"], sp["train"]["to"], sp["val"]["n"], sp["cal"]["n"], sp["test"]["n"],
+                  sp["test"]["from"], sp["test"]["to"]), ""]
+    lines += _table(report["seattle_test"], chosen)
+    sc = report["seattle_test_interval_coverage"]
+    lines += ["", "Range coverage on the Seattle test split: %s with the Seattle-calibrated range, %s with the "
+              "tuning-city range." % (_pct(sc.get("seattle_calibration")), _pct(sc.get("tuning_cities")))]
+    if report.get("cities_with_too_few_sales"):
+        lines += ["", "Cities with fewer than %d sales, not reported: %s." % (
+            MIN_CITY_SALES, ", ".join("%s (%d)" % kv for kv in report["cities_with_too_few_sales"].items()))]
     path.write_text("\n".join(lines).replace("$-", "-$") + "\n", encoding="utf-8")
 
 
@@ -516,13 +643,16 @@ def main() -> int:
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     (REPORTS_DIR / "zip_relative_evaluation.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     write_markdown(report)
-    print("Seattle test:")
-    for k, s in report["seattle_test"].items():
-        if isinstance(s, dict):
-            print("  %-45s MAE %s  median %% error %s" % (k, _money(s["mae"]), s["median_percent_error"]))
-    print("All test cities:")
-    for k, s in report["all_test_cities"].items():
-        print("  %-45s MAE %s  (%d rows)" % (k, _money(s["mae"]), s["n"]))
+    sel = report["selection"]
+    print("Chosen on tuning cities: %s" % sel["input_set_chosen_on_tuning_cities"])
+    print("Tuning MAE per input set:")
+    for k, v in sel["tuning_mae_per_input_set"].items():
+        print("  %-45s %s" % (k, _money(v)))
+    print("Final test cities (%s):" % ", ".join(report["final_test_cities"]))
+    for k, s in report["all_final_test_cities"].items():
+        print("  %-55s MAE %s  (%d rows)" % (k, _money(s["mae"]), s["n"]))
+    print("Range half width: %s" % {k: (v or {}).get("relative_half_width") for k, v in report["intervals"].items()})
+    print("Range coverage on final test cities: %s" % report["all_final_test_cities_interval_coverage"])
     print("Report written to %s" % DOC_PATH)
     return 0
 

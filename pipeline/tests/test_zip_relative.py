@@ -50,7 +50,7 @@ def _houses(zips: pd.DataFrame, n: int, city: str, id_prefix: str, rng, size: fl
     })
     history = pd.DataFrame([{"zip": r.zip, "month": m, "zhvi_usd": r.base * (1 + 0.004 * i)}
                             for r in zips.itertuples() for i, m in enumerate(MONTHS)])
-    parcels = sales[["property_id", "zip"]]
+    parcels = sales[["property_id", "zip", "lat", "lon"]]
     return sales, feats[house_features.FEATURE_COLUMNS], parcels, history
 
 
@@ -58,12 +58,17 @@ def _houses(zips: pd.DataFrame, n: int, city: str, id_prefix: str, rng, size: fl
 def synthetic():
     rng = np.random.default_rng(1)
     sea_z = _zips("981", 20, 47.62, -122.33, 600_000, 1_400_000, rng)
-    # A test city far from Seattle, mostly priced outside Seattle's range: Seattle's lat/lon learn nothing here.
-    far_z = _zips("980", 10, 47.38, -122.23, 380_000, 700_000, rng)
+    # Two test cities far from Seattle, mostly priced outside Seattle's range: Seattle's lat/lon learn
+    # nothing there. Kent is a tuning city, Auburn a final test city.
+    kent_z = _zips("980", 10, 47.38, -122.23, 380_000, 700_000, rng)
+    auburn_z = _zips("982", 10, 47.30, -122.21, 350_000, 650_000, rng)
     sea_sales, sea_feats, sea_parcels, sea_hist = _houses(sea_z, 1500, "Seattle", "S", rng)
-    far_sales, far_feats, far_parcels, far_hist = _houses(far_z, 700, "Kent", "K", rng, size=1.4)
-    return {"sea": (sea_sales, sea_feats, sea_parcels), "far": (far_sales, far_feats, far_parcels),
-            "history": pd.concat([sea_hist, far_hist], ignore_index=True)}
+    k_sales, k_feats, k_parcels, k_hist = _houses(kent_z, 700, "Kent", "K", rng, size=1.4)
+    a_sales, a_feats, a_parcels, a_hist = _houses(auburn_z, 700, "Auburn", "A", rng, size=1.3)
+    far = (pd.concat([k_sales, a_sales], ignore_index=True), pd.concat([k_feats, a_feats]),
+           pd.concat([k_parcels, a_parcels], ignore_index=True))
+    return {"sea": (sea_sales, sea_feats, sea_parcels), "far": far,
+            "history": pd.concat([sea_hist, k_hist, a_hist], ignore_index=True)}
 
 
 def test_relative_target_is_log_ratio():
@@ -112,31 +117,49 @@ def test_city_id_and_test_city_parcels(tmp_path):
     assert p["address"].iloc[1].endswith(", Kent, WA 98032")
 
 
+def test_neighbors_exclude_the_house_itself():
+    feats = pd.DataFrame({c: 1.0 for c in house_features.FEATURE_COLUMNS}, index=["p%d" % i for i in range(6)])
+    feats["living_sqft"] = [9000.0, 1000.0, 1000.0, 3000.0, 3000.0, 50.0]
+    parcels = pd.DataFrame({"property_id": feats.index, "zip": "98101",
+                            "lat": [47.600, 47.601, 47.599, 47.6005, 47.5995, 47.700],
+                            "lon": -122.3})
+    sale = feats.loc[["p0"]].reset_index(names="property_id").assign(lat=47.600, lon=-122.3)
+    out = zr.add_neighbor_features(sale, feats, parcels, k=4)
+    # Neighbours are p1..p4 (median 2000), not the house itself (9000) and not the far p5.
+    assert out["nb_log_living_sqft"].iloc[0] == pytest.approx(np.log(9000 / 2000))
+
+
 def test_trained_on_seattle_transfers_to_an_unseen_city(synthetic, tmp_path):
-    artifact, report = zr.train_zip_relative(*synthetic["sea"], *synthetic["far"], synthetic["history"])
+    artifact, report = zr.train_zip_relative(*synthetic["sea"], *synthetic["far"], synthetic["history"],
+                                             tuning_cities=("Kent",))
+    assert report["tuning_cities"] == ["Kent"] and report["final_test_cities"] == ["Auburn"]
     assert artifact["input_set"] in zr.SERVED_VARIANTS
-    kent = report["test_cities"]["Kent"]["test_rows"]
+    assert artifact["input_set"] == report["selection"]["input_set_chosen_on_tuning_cities"]
+    assert artifact["interval"]["calibrated_on"].startswith("tuning cities")
+    auburn = report["cities"]["Auburn"]["test_rows"]
     chosen = "zip_relative_" + artifact["input_set"]
-    # Kent's test rows are later than every Seattle training sale.
-    assert report["test_cities"]["Kent"]["splits"]["test"]["from"] > report["seattle_splits"]["val"]["to"]
-    assert kent[chosen]["mae"] < 0.6 * kent["zillow_zip_value"]["mae"]
-    assert kent[chosen]["mae"] < 0.6 * kent["seattle_house_model_absolute"]["mae"]
+    # Auburn's test rows are later than every Seattle training sale.
+    assert report["cities"]["Auburn"]["splits"]["test"]["from"] > report["seattle_splits"]["val"]["to"]
+    assert auburn[chosen]["mae"] < 0.6 * auburn["zillow_zip_value"]["mae"]
+    assert auburn[chosen]["mae"] < 0.6 * auburn["seattle_house_model_absolute"]["mae"]
     # The raw house record does not transfer: the bigger suburban houses look expensive to it.
-    assert kent[chosen]["mae"] < 0.6 * kent["zip_relative_house_record"]["mae"]
-    assert report["test_cities"]["Kent"]["zip_relative_vs_zillow"]["verdict"] == "the second model is better"
-    assert 0.6 <= report["test_cities"]["Kent"]["interval_coverage_on_test_rows"] <= 1.0
-    assert "local_house_model_reference" in kent
-    assert report["all_test_cities"][chosen]["n"] == kent[chosen]["n"]
+    assert auburn[chosen]["mae"] < 0.6 * auburn["zip_relative_house_record"]["mae"]
+    assert report["cities"]["Auburn"]["zip_relative_vs_zillow"]["verdict"] == "the second model is better"
+    assert 0.6 <= report["cities"]["Auburn"]["interval_coverage_on_test_rows"]["tuning_cities"] <= 1.0
+    assert "local_house_model_reference" in auburn
+    assert report["all_final_test_cities"][chosen]["n"] == auburn[chosen]["n"]
 
     # The served model predicts from the house record and the ZIP value only.
     far_sales, far_feats, far_parcels = synthetic["far"]
     row = far_sales.head(3).merge(far_feats, left_on="property_id", right_index=True)
     row["zhvi_usd"] = 500_000.0
     row = zr.add_relative_features(row, zr.zip_typical_houses(far_feats, far_parcels))
+    row = zr.add_neighbor_features(row, far_feats, far_parcels)
     moved = row.assign(lat=0.0, lon=0.0, record_date="1999-01-01")
     assert artifact["model"].predict(row) == pytest.approx(artifact["model"].predict(moved))
 
     doc = tmp_path / "report.md"
     zr.write_markdown(report, doc)
     text = doc.read_text(encoding="utf-8")
-    assert "### Kent" in text and "Zillow ZIP value alone" in text and chr(8212) not in text
+    assert text.index("## Final test cities") < text.index("## Tuning cities")
+    assert "### Auburn" in text and "### Kent" in text and "(chosen)" in text and chr(8212) not in text

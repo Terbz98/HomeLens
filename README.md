@@ -160,8 +160,9 @@ and `python -m pipeline.embed_images --city san_francisco`, then rerun San Franc
 Instead of the price, this model predicts how much more or less a house is worth than the typical
 house in its ZIP code (Zillow ZIP value in the sale month), from the house record only. It uses no
 latitude or longitude, so it can be used wherever Zillow publishes a ZIP value. It is trained on
-Seattle only and tested on seven other King County cities (Bellevue, Kent, Renton, Redmond,
-Kirkland, Shoreline, Auburn). Run it after the standard real-data pipeline:
+Seattle only. Three other King County cities (Bellevue, Kent, Renton) are used to choose the input
+set and size the prediction range, and four more (Auburn, Kirkland, Redmond, Shoreline) are scored
+once at the end. Run it after the standard real-data pipeline:
 
 ```bash
 python -m pipeline.king_county_cities --download
